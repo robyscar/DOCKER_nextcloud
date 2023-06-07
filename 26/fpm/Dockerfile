@@ -1,3 +1,13 @@
+# To build the container, run the following command:
+# --------------------------------------------------------------------
+# 
+#     docker build -t postgresql-15-armhf .
+#
+#     docker build --force-rm --label nextcloud_latest --tag nextcloud_latest:latest . 2>&1 | tee -a ./nextcloud_latest.log
+
+
+
+
 # DO NOT EDIT: created by update.sh from Dockerfile-debian.template
 FROM php:8.2-fpm-bullseye
 
