@@ -2,6 +2,14 @@
 FROM php:8.2-fpm-bullseye
 
 # entrypoint.sh and cron.sh dependencies
+
+# added 
+#       openssh-server openssh-client \
+#       mc nano less \
+#       wget curl \
+#       apt-transport-https \
+# 
+
 RUN set -ex; \
     \
     apt-get update; \
@@ -11,6 +19,10 @@ RUN set -ex; \
         libldap-common \
         libmagickcore-6.q16-6-extra \
         rsync \
+        openssh-server openssh-client \
+        mc nano less \
+        wget curl \
+        apt-transport-https \
     ; \
     rm -rf /var/lib/apt/lists/*; \
     \
@@ -19,8 +31,13 @@ RUN set -ex; \
 
 # install the PHP extensions we need
 # see https://docs.nextcloud.com/server/stable/admin_manual/installation/source_installation.html
-ENV PHP_MEMORY_LIMIT 512M
-ENV PHP_UPLOAD_LIMIT 512M
+
+#   changed from >> to
+#   ENV PHP_MEMORY_LIMIT 512M
+#   ENV PHP_UPLOAD_LIMIT 512M
+
+ENV PHP_MEMORY_LIMIT 128M
+ENV PHP_UPLOAD_LIMIT 128M
 RUN set -ex; \
     \
     savedAptMark="$(apt-mark showmanual)"; \
@@ -128,8 +145,16 @@ RUN set -ex; \
     apt-get update; \
     apt-get install -y --no-install-recommends $fetchDeps; \
     \
+#   modified from     
     curl -fsSL -o nextcloud.tar.bz2 "https://download.nextcloud.com/server/releases/nextcloud-26.0.2.tar.bz2"; \
     curl -fsSL -o nextcloud.tar.bz2.asc "https://download.nextcloud.com/server/releases/nextcloud-26.0.2.tar.bz2.asc"; \
+
+#   to latest-26.tar.bz2
+#   so image will be always latest
+#       curl -fsSL -o nextcloud.tar.bz2 "https://download.nextcloud.com/server/releases/latest-26.tar.bz2"; \
+#       curl -fsSL -o nextcloud.tar.bz2.asc "https://download.nextcloud.com/server/releases/latest-26.tar.bz2.asc"; \
+
+
     export GNUPGHOME="$(mktemp -d)"; \
 # gpg key from https://nextcloud.com/nextcloud.asc
     gpg --batch --keyserver keyserver.ubuntu.com --recv-keys 28806A878AE423A28372792ED75899B9A724937A; \
