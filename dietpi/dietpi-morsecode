@@ -1,0 +1,375 @@
+#!/bin/bash
+{
+	#////////////////////////////////////
+	# DietPi Morse Code Script
+	#
+	#////////////////////////////////////
+	# Created by Daniel Knight / daniel.knight@dietpi.com / dietpi.com
+	#
+	#////////////////////////////////////
+	#
+	# Info:
+	# - Location: /boot/dietpi/dietpi-morsecode
+	# - Converts and renders a text file into morse code
+	#
+	# Usage:
+	# - dietpi-morsecode 0/noinput	= Output to console/screen
+	# - dietpi-morsecode 1		= Output to first two status LEDs
+	# - dietpi-morsecode 2		= Output to ALSA (sound)
+	#////////////////////////////////////
+
+	# At the end of the day, if your using this, your probably in a life threating situation.
+	# I doubt your Transmission downloads, or webserver is going to be more important.
+	# So, let's change the nice to -10 (high priority) ;)
+	renice -n -10 $$ &> /dev/null
+
+	# Import DietPi-Globals --------------------------------------------------------------
+	. /boot/dietpi/func/dietpi-globals
+	readonly G_PROGRAM_NAME='DietPi-MorseCode'
+	G_CHECK_ROOT_USER
+	G_INIT
+	# Import DietPi-Globals --------------------------------------------------------------
+
+	# Grab input
+	[[ $1 == [012] ]] && INPUT=$1 || INPUT=0
+
+	#/////////////////////////////////////////////////////////////////////////////////////
+	# Output Data
+	#/////////////////////////////////////////////////////////////////////////////////////
+	OUTPUT_MODE=$INPUT
+	SOUND_PID=-1
+
+	Output_On(){
+
+		# console/screen
+		if (( $OUTPUT_MODE == 0 )); then
+
+			# Fill terminal with colour
+			# - 8bit colour code (light gray) for max terminal support
+			echo -ne '\e[H\e[47m\e[J'
+
+		# First two status LEDs
+		elif (( $OUTPUT_MODE == 1 )); then
+
+			echo 1 > /sys/class/leds/led0/brightness
+			echo 1 > /sys/class/leds/led1/brightness
+
+		# ALSA (sound)
+		elif (( $OUTPUT_MODE == 2 )); then
+
+			# Isn't quick enough in bash. Can't get buffer/latency low enough to make it usable.
+			speaker-test -b 40000 -t sine -f 800 -l 1 -p 1 &> /dev/null &
+			SOUND_PID=$!
+
+		fi
+
+	}
+
+	Output_Off(){
+
+		# console/screen
+		if (( $OUTPUT_MODE == 0 )); then
+
+			# Reset colour
+			echo -ne '\e[H\e[0m\e[J'
+
+		# First two status LEDs
+		elif (( $OUTPUT_MODE == 1 )); then
+
+			echo 0 > /sys/class/leds/led0/brightness
+			echo 0 > /sys/class/leds/led1/brightness
+
+		# ALSA (sound)
+		elif (( $OUTPUT_MODE == 2 )); then
+
+			kill -9 "$SOUND_PID"
+
+		fi
+	}
+
+	#/////////////////////////////////////////////////////////////////////////////////////
+	# Morse Code Data
+	#/////////////////////////////////////////////////////////////////////////////////////
+	# Input file path
+	readonly FP_INPUT='/root/dietpi-morsecode'
+	# Define single unit duration (essentially the speed at which the morse code is outputted)
+	readonly MC_DURATION_UNIT='0.15'
+	# Dash and next char duration ( MC_DURATION_UNIT * 3 )
+	readonly MC_DURATION_DASH=$(mawk "{print $MC_DURATION_UNIT * 3}" <<< '')
+	# New word duration ( MC_DURATION_UNIT * 7 )
+	readonly MC_DURATION_WORD=$(mawk "{print $MC_DURATION_UNIT * 7}" <<< '')
+
+	Mc_Dot(){
+
+		Output_On
+		G_SLEEP "$MC_DURATION_UNIT"
+		Output_Off
+		G_SLEEP "$MC_DURATION_UNIT"
+
+	}
+
+	Mc_Dash(){
+
+		Output_On
+		G_SLEEP "$MC_DURATION_DASH"
+		Output_Off
+		G_SLEEP "$MC_DURATION_UNIT"
+
+	}
+
+	Mc_Next_Char(){ G_SLEEP "$MC_DURATION_DASH"; }
+
+	Mc_Next_Word(){ G_SLEEP "$MC_DURATION_WORD"; }
+
+	# AR
+	Mc_End_of_Message(){
+
+		Mc_Next_Word
+		Mc_Dot
+		Mc_Dash
+		Mc_Dot
+		Mc_Dash
+		Mc_Dot
+		Mc_Next_Word
+
+	}
+
+	Convert_Char_To_Morsecode(){
+
+		case "$1" in
+			0) Mc_Dash; Mc_Dash; Mc_Dash; Mc_Dash; Mc_Dash;;
+			1) Mc_Dot; Mc_Dash; Mc_Dash; Mc_Dash; Mc_Dash;;
+			2) Mc_Dot; Mc_Dot; Mc_Dash; Mc_Dash; Mc_Dash;;
+			3) Mc_Dot; Mc_Dot; Mc_Dot; Mc_Dash; Mc_Dash;;
+			4) Mc_Dot; Mc_Dot; Mc_Dot; Mc_Dot; Mc_Dash;;
+			5) Mc_Dot; Mc_Dot; Mc_Dot; Mc_Dot; Mc_Dot;;
+			6) Mc_Dash; Mc_Dot; Mc_Dot; Mc_Dot; Mc_Dot;;
+			7) Mc_Dash; Mc_Dash; Mc_Dot; Mc_Dot; Mc_Dot;;
+			8) Mc_Dash; Mc_Dash; Mc_Dash; Mc_Dot; Mc_Dot;;
+			9) Mc_Dash; Mc_Dash; Mc_Dash; Mc_Dash; Mc_Dot;;
+			a) Mc_Dot; Mc_Dash;;
+			b) Mc_Dash; Mc_Dot; Mc_Dot; Mc_Dot;;
+			c) Mc_Dash; Mc_Dot; Mc_Dash; Mc_Dot;;
+			d)
+				Mc_Dash
+				Mc_Dot
+				Mc_Dot
+			;;
+			e)
+				Mc_Dot
+			;;
+			f)
+				Mc_Dot
+				Mc_Dot
+				Mc_Dash
+				Mc_Dot
+			;;
+			g)
+				Mc_Dash
+				Mc_Dash
+				Mc_Dot
+			;;
+			h)
+				Mc_Dot
+				Mc_Dot
+				Mc_Dot
+				Mc_Dot
+			;;
+			i)
+				Mc_Dot
+				Mc_Dot
+			;;
+			j)
+				Mc_Dot
+				Mc_Dash
+				Mc_Dash
+				Mc_Dash
+			;;
+			k)
+				Mc_Dash
+				Mc_Dot
+				Mc_Dash
+			;;
+			l)
+				Mc_Dot
+				Mc_Dash
+				Mc_Dot
+				Mc_Dot
+			;;
+			m)
+				Mc_Dash
+				Mc_Dash
+			;;
+			n)
+				Mc_Dash
+				Mc_Dot
+			;;
+			o)
+				Mc_Dash
+				Mc_Dash
+				Mc_Dash
+			;;
+			p)
+				Mc_Dot
+				Mc_Dash
+				Mc_Dash
+				Mc_Dot
+			;;
+			q)
+				Mc_Dash
+				Mc_Dash
+				Mc_Dot
+				Mc_Dash
+			;;
+			r)
+				Mc_Dot
+				Mc_Dash
+				Mc_Dot
+			;;
+			s)
+				Mc_Dot
+				Mc_Dot
+				Mc_Dot
+			;;
+			t)
+				Mc_Dash
+			;;
+			u)
+				Mc_Dot
+				Mc_Dot
+				Mc_Dash
+			;;
+			v)
+				Mc_Dot
+				Mc_Dot
+				Mc_Dot
+				Mc_Dash
+			;;
+			w)
+				Mc_Dot
+				Mc_Dash
+				Mc_Dash
+			;;
+			x)
+				Mc_Dash
+				Mc_Dot
+				Mc_Dot
+				Mc_Dash
+			;;
+			y)
+				Mc_Dash
+				Mc_Dot
+				Mc_Dash
+				Mc_Dash
+			;;
+			z)
+				Mc_Dash
+				Mc_Dash
+				Mc_Dot
+				Mc_Dot
+			;;
+			'.')
+				Mc_Dot
+				Mc_Dash
+				Mc_Dot
+				Mc_Dash
+				Mc_Dot
+				Mc_Dash
+			;;
+			',')
+				Mc_Dash
+				Mc_Dash
+				Mc_Dot
+				Mc_Dot
+				Mc_Dash
+				Mc_Dash
+			;;
+			':')
+				Mc_Dash
+				Mc_Dash
+				Mc_Dash
+				Mc_Dot
+				Mc_Dot
+				Mc_Dot
+			;;
+			"'")
+				Mc_Dot
+				Mc_Dash
+				Mc_Dash
+				Mc_Dash
+				Mc_Dash
+				Mc_Dot
+			;;
+			'-')
+				Mc_Dash
+				Mc_Dot
+				Mc_Dot
+				Mc_Dot
+				Mc_Dot
+				Mc_Dash
+			;;
+			'/')
+				Mc_Dash
+				Mc_Dot
+				Mc_Dot
+				Mc_Dash
+				Mc_Dot
+			;;
+			'@')
+				Mc_Dot
+				Mc_Dash
+				Mc_Dash
+				Mc_Dot
+				Mc_Dash
+				Mc_Dot
+			;;
+			'=')
+				Mc_Dash
+				Mc_Dot
+				Mc_Dot
+				Mc_Dot
+				Mc_Dash
+			;;
+			*) :;;
+		esac
+
+	}
+
+	#/////////////////////////////////////////////////////////////////////////////////////
+	# Main Loop
+	#/////////////////////////////////////////////////////////////////////////////////////
+	# Check for input file
+	if [[ ! -f $FP_INPUT ]]; then
+
+		G_DIETPI-NOTIFY 1 "No text file was found. Please create a file at:\n$FP_INPUT\nThis file will then be converted to Morse Code."
+		exit 1
+
+	fi
+
+	# Clear screen in case of screen output mode
+	(( $OUTPUT_MODE == 0 )) && G_TERM_CLEAR
+
+	# Process file (read char one at a time, convert to morse code and render)
+	while read -r -n1 char
+	do
+		# Space (new word)
+		if [[ $char == [[:space:]] ]]; then
+
+			Mc_Next_Word
+
+		# Next char
+		else
+
+			Mc_Next_Char
+			Convert_Char_To_Morsecode "${char,,}"
+
+		fi
+
+	done < "$FP_INPUT"
+
+	# Send end of message (AR)
+	Mc_End_of_Message
+	#-----------------------------------------------------------------------------------
+	exit
+	#-----------------------------------------------------------------------------------
+}

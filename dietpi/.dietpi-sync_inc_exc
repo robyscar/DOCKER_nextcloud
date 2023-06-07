@@ -1,0 +1,12 @@
+#DietPi-Sync | Custom include/exclude filters
+#
+#To EXCLUDE (-) all files by name:
+#- file
+#To EXCLUDE (-) a single file by path, relative to source directory:
+#- /relative/path/to/file
+#To EXCLUDE (-) a specific directory by path, relative to source directory:
+#- /relative/path/to/directory/
+#
+#To INCLUDE (+) something from within an otherwise excluded directory:
+#+ /relative/path/to/directory/include_this
+

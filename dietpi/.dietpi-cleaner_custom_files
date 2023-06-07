@@ -1,0 +1,33 @@
+# ------------------------------------------------------------------
+# Specify filenames or extentions to match during filescan removals.
+#
+# One item per line.
+#
+# Examples:
+# *.tmp
+# ThisFileWillBeDeleted.mp3
+# *AnyFilenameContainingThisTextWillBeDeleted*
+#
+# To save and exit:
+# - Press CTRL+X
+# - Press Y
+# - Press Enter
+# ------------------------------------------------------------------
+# Uncomment line below to include tmp files during scan.
+*.tmp
+
+# Uncomment line below to include Windows thumbnail cache during scan.
+#Thumbs.db
+# /root/logfilestorage/*.log
+# /root/logfilestorage/wtmp
+# /root/logfilestorage/gogs/*.log
+# /root/logfilestorage/journal/*.*
+# /root/logfilestorage/letsencrypt/*.log
+# /root/logfilestorage/lighttpd/*.log
+# /root/logfilestorage/pihole/*.log
+# /root/logfilestorage/samba/*.*
+
+*.log
+*.tmp
+wtmp.*
+

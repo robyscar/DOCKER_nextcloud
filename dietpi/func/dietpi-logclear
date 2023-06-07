@@ -1,0 +1,198 @@
+#!/bin/bash
+{
+	#////////////////////////////////////
+	# DietPi-logclear Script
+	#
+	#////////////////////////////////////
+	# Created by Daniel Knight / daniel.knight@dietpi.com / dietpi.com
+	#
+	#////////////////////////////////////
+	# Info:
+	# - Location: /boot/dietpi/func/dietpi-logclear
+	# - Clears logs in $FP_LOG, with backup option.
+	#
+	# usage:
+	# - dietpi-logclear 0		| Update current log files data to "$FP_BACKUP/*. Then clear contents.
+	# - dietpi-logclear 1		| Clear contents of all logs in $FP_LOG.
+	# - dietpi-logclear 2		| Delete all logs in $FP_LOG and backups.
+	#////////////////////////////////////
+
+	# Import DietPi-Globals --------------------------------------------------------------
+	. /boot/dietpi/func/dietpi-globals
+	readonly G_PROGRAM_NAME='DietPi-Logclear'
+	G_CHECK_ROOT_USER
+	G_INIT
+	# Import DietPi-Globals --------------------------------------------------------------
+
+	[[ $1 == [012] ]] && INPUT=$1 || INPUT=-1
+
+	#////////////////////////////////////////////////////////////////
+	# Global
+	#////////////////////////////////////////////////////////////////
+	readonly FP_LOG='/var/log'
+	readonly FP_BACKUP='/root/logfile_storage'
+
+	FILE_NAME=
+	# 0=text log, 1=compressed
+	FILE_TYPE=0
+	FILESIZE_BYTES=0
+	PROCESS_FILE=0
+
+	#////////////////////////////////////////////////////////////////
+	# Info Printouts
+	#////////////////////////////////////////////////////////////////
+	INFO_SIZE_CLEARED=0
+	INFO_FILES_PROCESSED=0
+	INFO_LOGS_DELETED=0
+	INFO_LOGS_CLEARED=0
+	INFO_LOGS_NOTSUPPORTED=0
+	INFO_BACKUPS_MADE=0
+
+	#////////////////////////////////////////////////////////////////
+	# Process log files
+	#////////////////////////////////////////////////////////////////
+	Process_Logfiles(){
+
+		#-----------------------------------------------------------------------------------
+		# Remove internally rotated LetsEncrypt log files, prior to log loop
+		[[ -d $FP_LOG/letsencrypt ]] && rm -f "$FP_LOG/letsencrypt/letsencrypt.log."*
+		#-----------------------------------------------------------------------------------
+		# Find existing logs and generate a filepath array, excluding symlinks
+		local ARRAY_LOG_FILEPATH=()
+		while read -r line
+		do
+			ARRAY_LOG_FILEPATH+=("$line")
+
+		done <<< "$(find "$FP_LOG" -type f)"
+		#-----------------------------------------------------------------------------------
+		# Process Logfiles, if there are any
+		(( ${#ARRAY_LOG_FILEPATH[@]} )) && for i in "${ARRAY_LOG_FILEPATH[@]}"
+		do
+			# File details
+			FILE_NAME=${i#/var/log/}
+			FILESIZE_BYTES=$(stat -c%s "$i")
+			PROCESS_FILE=1
+			FILE_TYPE=0
+
+			# Special files
+			# - Compessed | FILE_TYPE 1
+			if [[ $FILE_NAME == *'.zip' || $FILE_NAME == *'.gz' ]]; then
+
+				FILE_TYPE=1
+
+			# - Excluded
+			#	Size < 11 byte
+			#	SQLite database files (Sonarr/Radarr/Lidarr): .db .db-shm .db-wal
+			elif (( $FILESIZE_BYTES < 11 )) || [[ $FILE_NAME == *'.db'* ]]; then
+
+				PROCESS_FILE=0
+
+			fi
+
+			# Process File
+			if (( $PROCESS_FILE == 1 )); then
+
+				# Delete all compressed filetypes
+				if (( $FILE_TYPE == 1 )); then
+
+					rm "$i"
+					((INFO_LOGS_DELETED++))
+					((INFO_LOGS_NOTSUPPORTED++))
+
+				# Update current log files data to $FP_BACKUP/*, then clear
+				elif (( $INPUT == 0 )); then
+
+					# Generate filepaths
+					if [[ ! -f $FP_BACKUP/$FILE_NAME ]]; then
+
+						# This is a little "hack" to automatically generate the required subdirectories.
+						# EG: /this/is/my/logfile.txt | will create the folders /this/is/my
+						mkdir -p "$FP_BACKUP/$FILE_NAME"
+						rm -R "$FP_BACKUP/${FILE_NAME:?}"
+
+					fi
+
+					# Write current log file contents to existing
+					cat "$i" >> "$FP_BACKUP/$FILE_NAME"
+					((INFO_BACKUPS_MADE++))
+
+					# Clear log file contents
+					> "$i"
+					((INFO_LOGS_CLEARED++))
+
+				# Clear log file contents
+				elif (( $INPUT == 1 )); then
+
+					> "$i"
+					((INFO_LOGS_CLEARED++))
+
+				# Hard delete log files
+				elif (( $INPUT == 2 )); then
+
+					rm "$i"
+					((INFO_LOGS_DELETED++))
+
+				fi
+
+				# Update size cleared
+				INFO_SIZE_CLEARED=$(($INFO_SIZE_CLEARED + $FILESIZE_BYTES))
+
+			fi
+
+			((INFO_FILES_PROCESSED++))
+		done
+
+	}
+
+	#////////////////////////////////////////////////////////////////
+	# Main Loop
+	#////////////////////////////////////////////////////////////////
+
+	#----------------------------------------------------------------
+	# Print usage
+	if [[ $INPUT == '-1' ]]; then
+
+		G_DIETPI-NOTIFY 2 "Available commands:\e[0m
+\n\e[1m dietpi-logclear 0\e[0m
+\e[38;5;244m Backup contents of all log files from $FP_LOG to $FP_BACKUP/*.\n Also clears the contents of all logs files in $FP_LOG.\e[0m
+\n\e[1m dietpi-logclear 1\e[0m
+\e[38;5;244m Clear contents of all logs files in $FP_LOG.\e[0m
+\n\e[1m dietpi-logclear 2\e[0m
+\e[38;5;244m Physically delete all files in $FP_LOG and backups in $FP_BACKUP/*.\n May prevent log files from being updated, restart services or reboot.\e[0m\n"
+
+	#----------------------------------------------------------------
+	# Process log files
+	else
+
+		Process_Logfiles
+
+		# Delete log file backups
+		[[ $INPUT == 2 && -f $FP_BACKUP ]] && rm -R "$FP_BACKUP"
+
+		# Print Info
+		info="
+ - Log file directory      \e[90m|\e[0m $FP_LOG
+ - Processed files         \e[90m|\e[0m $INFO_FILES_PROCESSED
+ - Cleared log files       \e[90m|\e[0m $INFO_LOGS_CLEARED
+ - Unsupported files       \e[90m|\e[0m $INFO_LOGS_NOTSUPPORTED
+ - Deleted files           \e[90m|\e[0m $INFO_LOGS_DELETED
+ - Space cleared           \e[90m|\e[0m $(($INFO_SIZE_CLEARED / 1024)) KiB"
+
+		# + Backups
+		if (( $INPUT == 0 )); then
+
+			info+="
+ \e[38;5;244mBackup Info:\e[0m
+ - Backup directory        \e[90m|\e[0m $FP_BACKUP
+ - Updated log files       \e[90m|\e[0m $INFO_BACKUPS_MADE"
+
+		fi
+
+		G_DIETPI-NOTIFY 2 "\e[0mSummary:$info\n"
+
+	fi
+
+	#-----------------------------------------------------------------------------------
+	exit 0
+	#-----------------------------------------------------------------------------------
+}

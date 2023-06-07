@@ -1,0 +1,663 @@
+#!/bin/bash
+{
+	#////////////////////////////////////
+	# DietPi
+	#
+	#////////////////////////////////////
+	# Created by Daniel Knight / daniel.knight@dietpi.com / dietpi.com
+	#////////////////////////////////////
+	#
+	# Info:
+	# - Location: /boot/dietpi/func/dietpi-obtain_hw_model
+	# - Generates /boot/dietpi/.hw_model
+	# - Called from /boot/dietpi/preboot, called by /etc/systemd/system/dietpi-preboot.service
+	#
+	# Developer note: Sync highest IDs with dietpi-software:
+	# - MAX_G_HW_MODEL=81
+	# - MAX_G_HW_ARCH=11
+	# - MAX_G_DISTRO=7
+	#
+	# G_HW_MODEL 81 StarFive VisionFive 2
+	# G_HW_MODEL 80 Orange Pi 5
+	# G_HW_MODEL 79 NanoPi R6S/R6C
+	# G_HW_MODEL 78 ROCK 5B
+	# G_HW_MODEL 77 ROCK 3A
+	# G_HW_MODEL 76 NanoPi R5S/R5C
+	# G_HW_MODEL 75 Container
+	# G_HW_MODEL 74 Radxa Zero
+	# G_HW_MODEL 73 ROCK Pi S
+	# G_HW_MODEL 72 ROCK 4
+	# G_HW_MODEL 70 Sparky SBC
+	# G_HW_MODEL 68 NanoPi M4/T4/NEO4
+	# G_HW_MODEL 67 NanoPi K1 Plus
+	# G_HW_MODEL 66 NanoPi M1 Plus
+	# G_HW_MODEL 65 NanoPi NEO2
+	# G_HW_MODEL 64 NanoPi NEO Air
+	# G_HW_MODEL 63 NanoPi M1
+	# G_HW_MODEL 62 NanoPi M3/T3/Fire3
+	# G_HW_MODEL 61 NanoPi M2/T2
+	# G_HW_MODEL 60 NanoPi NEO
+	# G_HW_MODEL 59 ZeroPi
+	# G_HW_MODEL 58 NanoPi M4V2
+	# G_HW_MODEL 57 NanoPi NEO Plus2
+	# G_HW_MODEL 56 NanoPi NEO3
+	# G_HW_MODEL 55 NanoPi R2S
+	# G_HW_MODEL 54 NanoPi K2
+	# G_HW_MODEL 52 ASUS Tinker Board
+	# G_HW_MODEL 49 Quartz64
+	# G_HW_MODEL 48 NanoPi R1
+	# G_HW_MODEL 47 NanoPi R4S
+	# G_HW_MODEL 46 Pinebook Pro
+	# G_HW_MODEL 45 PINE H64
+	# G_HW_MODEL 44 Pinebook
+	# G_HW_MODEL 43 ROCK64
+	# G_HW_MODEL 42 ROCKPro64
+	# G_HW_MODEL 40 PINE A64
+	# G_HW_MODEL 29 Generic Amlogic S922X
+	# G_HW_MODEL 28 Generic Amlogic S905
+	# G_HW_MODEL 27 Generic Allwinner H6
+	# G_HW_MODEL 26 Generic Allwinner H5
+	# G_HW_MODEL 25 Generic Allwinner H3
+	# G_HW_MODEL 24 Generic Rockchip RK3399
+	# G_HW_MODEL 23 Generic Rockchip RK3328
+	# G_HW_MODEL 22 Generic Device
+	# G_HW_MODEL 21 x86_64 PC
+	# G_HW_MODEL 20 x86_64 VM
+	# G_HW_MODEL 16 Odroid C4/HC4
+	# G_HW_MODEL 15 Odroid N2
+	# G_HW_MODEL 13 Odroid U3
+	# G_HW_MODEL 12 Odroid C2
+	# G_HW_MODEL 11 Odroid XU3/XU4/MC1/HC1/HC2
+	# G_HW_MODEL 10 Odroid C1
+	# G_HW_MODEL 4 Raspberry Pi 4/400
+	# G_HW_MODEL 3 Raspberry Pi 3/3+/Zero 2
+	# G_HW_MODEL 2 Raspberry Pi 2
+	# G_HW_MODEL 1 Raspberry Pi 1/Zero (512 MiB)
+	# G_HW_MODEL 0 Raspberry Pi 1 (256 MiB)
+	# ----------------
+	# G_HW_ARCH 11 riscv64
+	# G_HW_ARCH 10 x86_64/amd64
+	# G_HW_ARCH 3 aarch64/arm64
+	# G_HW_ARCH 2 armv7l/armhf
+	# G_HW_ARCH 1 armv6l/armhf
+	# G_HW_ARCH 0 unsupported
+	#----------------
+	# G_HW_CPUID 0 Not set
+	# G_HW_CPUID 1 Allwinner H3
+	# G_HW_CPUID 2 Allwinner H5
+	# G_HW_CPUID 3 Rockchip RK3399
+	# G_HW_CPUID 4 Amlogic S922X
+	# G_HW_CPUID 5 Allwinner H6
+	# G_HW_CPUID 6 Rockchip RK3328
+	# G_HW_CPUID 7 Amlogic S905
+	# G_HW_CPUID 8 Allwinner A64
+	# G_HW_CPUID 9 Rockchip RK3566
+	# G_HW_CPUID 10 Rockchip RK3568
+	# G_HW_CPUID 11 Rockchip RK3588
+	# ----------------
+	# G_DISTRO 5 Buster
+	# G_DISTRO 6 Bullseye
+	# G_DISTRO 7 Bookworm
+	#////////////////////////////////////
+
+	#/////////////////////////////////////////////////////////////////////////////////////
+	# Obtain Hardware Model index
+	#/////////////////////////////////////////////////////////////////////////////////////
+	FP_G_HW_MODEL_IDENTIFIER='/etc/.dietpi_hw_model_identifier'
+
+	# Read .hw_model if existent to preserve existing G_HW_UUID
+	G_HW_UUID=
+	[[ -f '/boot/dietpi/.hw_model' ]] && . /boot/dietpi/.hw_model
+	[[ $G_HW_UUID ]] || G_HW_UUID=$(</proc/sys/kernel/random/uuid)
+
+	G_HW_MODEL=22
+	G_HW_MODEL_NAME='Generic Device'
+	G_HW_ARCH=0
+	G_HW_ARCH_NAME=$(uname -m)
+	G_HW_CPUID=0
+	G_HW_CPU_CORES=$(nproc --all)
+	G_ROOTFS_DEV=$(findmnt -Ufnro SOURCE -M /)
+	G_DISTRO=0
+	G_DISTRO_NAME='Unknown'
+
+	# RPi extras
+	G_RASPBIAN=0
+	G_HW_ONBOARD_WIFI=0
+	G_HW_REVISION=
+	G_HW_PCB_REVISION='Unknown'
+	G_HW_MEMORY_SIZE=512
+	G_HW_MANUFACTURER='Unknown'
+
+	RPi_BoardInfo(){
+
+		G_HW_MODEL=1
+		G_HW_MODEL_NAME='RPi (Unknown)'
+
+		# Detect if this is Raspbian/Raspberry Pi OS (32-bit) or Debian/Raspberry Pi OS (64-bit)
+		grep -q '^ID=raspbian' /etc/os-release && G_RASPBIAN=1
+
+		# Obtain device info by revision code: https://github.com/raspberrypi/documentation/tree/master/hardware/raspberrypi/revision-codes
+		G_HW_REVISION=$(mawk '/^Revision/{print $3;exit}' /proc/cpuinfo)
+
+		# New style revision codes: 6th hex char >= 8
+		if [[ ${G_HW_REVISION: -6:1} == [8-9a-f] ]]; then
+
+			# PCB revision
+			G_HW_PCB_REVISION=${G_HW_REVISION: -1:1}
+			# RPi model
+			# shellcheck disable=SC2249
+			case ${G_HW_REVISION: -3:2} in
+				00) G_HW_MODEL_NAME='RPi A';;
+				01) G_HW_MODEL_NAME='RPi B';;
+				02) G_HW_MODEL_NAME='RPi A+';;
+				03) G_HW_MODEL_NAME='RPi B+';;
+				04) G_HW_MODEL_NAME='RPi 2 Model B' G_HW_MODEL=2;;
+				05) G_HW_MODEL_NAME='RPi B';;
+				06) G_HW_MODEL_NAME='RPi CM';;
+				08) G_HW_MODEL_NAME='RPi 3 Model B' G_HW_MODEL=3 G_HW_ONBOARD_WIFI=1;;
+				09) G_HW_MODEL_NAME='RPi Zero';;
+				0a) G_HW_MODEL_NAME='RPi CM 3' G_HW_MODEL=3;;
+				0c) G_HW_MODEL_NAME='RPi Zero W' G_HW_ONBOARD_WIFI=1;;
+				0d) G_HW_MODEL_NAME='RPi 3 Model B+' G_HW_MODEL=3 G_HW_ONBOARD_WIFI=1;;
+				0e) G_HW_MODEL_NAME='RPi 3 Model A+' G_HW_MODEL=3 G_HW_ONBOARD_WIFI=1;;
+				10) G_HW_MODEL_NAME='RPi CM 3+' G_HW_MODEL=3;;
+				11) G_HW_MODEL_NAME='RPi 4 Model B' G_HW_MODEL=4 G_HW_ONBOARD_WIFI=1;;
+				12) G_HW_MODEL_NAME='RPi Zero 2 W'  G_HW_MODEL=3 G_HW_ONBOARD_WIFI=1;;
+				13) G_HW_MODEL_NAME='RPi 400' G_HW_MODEL=4 G_HW_ONBOARD_WIFI=1;;
+				14) G_HW_MODEL_NAME='RPi CM 4' G_HW_MODEL=4;;
+			esac
+			# Manufacturer
+			# shellcheck disable=SC2249
+			case ${G_HW_REVISION: -5:1} in
+				0) G_HW_MANUFACTURER='Sony UK';;
+				1) G_HW_MANUFACTURER='Egoman';;
+				2|4) G_HW_MANUFACTURER='Embest';;
+				3) G_HW_MANUFACTURER='Sony Japan';;
+				5) G_HW_MANUFACTURER='Stadium';;
+			esac
+			# Memory size
+			G_HW_MEMORY_SIZE=$(( 256*2**( 16#${G_HW_REVISION: -6:1} - 8 ) ))
+			(( $G_HW_MEMORY_SIZE == 256 )) && G_HW_MODEL=0
+
+		# Old style revision codes
+		elif [[ $G_HW_REVISION == *'Beta' ]]; then
+
+			G_HW_MODEL=0
+			G_HW_MODEL_NAME='RPi B'
+			G_HW_MEMORY_SIZE=256
+
+		elif [[ $G_HW_REVISION == *'000'[23] ]]; then
+
+			G_HW_MODEL=0
+			G_HW_MODEL_NAME='RPi B'
+			G_HW_PCB_REVISION='1.0'
+			G_HW_MEMORY_SIZE=256
+			G_HW_MANUFACTURER='Egoman'
+
+		elif [[ $G_HW_REVISION == *'0004' ]]; then
+
+			G_HW_MODEL=0
+			G_HW_MODEL_NAME='RPi B'
+			G_HW_PCB_REVISION='2.0'
+			G_HW_MEMORY_SIZE=256
+			G_HW_MANUFACTURER='Sony UK'
+
+		elif [[ $G_HW_REVISION == *'0005' ]]; then
+
+			G_HW_MODEL=0
+			G_HW_MODEL_NAME='RPi B'
+			G_HW_PCB_REVISION='2.0'
+			G_HW_MEMORY_SIZE=256
+			G_HW_MANUFACTURER='Qisda'
+
+		elif [[ $G_HW_REVISION == *'0006' ]]; then
+
+			G_HW_MODEL=0
+			G_HW_MODEL_NAME='RPi B'
+			G_HW_PCB_REVISION='2.0'
+			G_HW_MEMORY_SIZE=256
+			G_HW_MANUFACTURER='Egoman'
+
+		elif [[ $G_HW_REVISION == *'0007' ]]; then
+
+			G_HW_MODEL=0
+			G_HW_MODEL_NAME='RPi A'
+			G_HW_PCB_REVISION='2.0'
+			G_HW_MEMORY_SIZE=256
+			G_HW_MANUFACTURER='Egoman'
+
+		elif [[ $G_HW_REVISION == *'0008' ]]; then
+
+			G_HW_MODEL=0
+			G_HW_MODEL_NAME='RPi A'
+			G_HW_PCB_REVISION='2.0'
+			G_HW_MEMORY_SIZE=256
+			G_HW_MANUFACTURER='Sony UK'
+
+		elif [[ $G_HW_REVISION == *'0009' ]]; then
+
+			G_HW_MODEL=0
+			G_HW_MODEL_NAME='RPi A'
+			G_HW_PCB_REVISION='2.0'
+			G_HW_MEMORY_SIZE=256
+			G_HW_MANUFACTURER='Qisda'
+
+		elif [[ $G_HW_REVISION == *'000'[df] ]]; then
+
+			G_HW_MODEL_NAME='RPi B'
+			G_HW_PCB_REVISION='2.0'
+			G_HW_MANUFACTURER='Egoman'
+
+		elif [[ $G_HW_REVISION == *'000e' ]]; then
+
+			G_HW_MODEL_NAME='RPi B'
+			G_HW_PCB_REVISION='2.0'
+			G_HW_MANUFACTURER='Sony UK'
+
+		elif [[ $G_HW_REVISION == *'0010' ]]; then
+
+			G_HW_MODEL_NAME='RPi B+'
+			G_HW_PCB_REVISION='1.2'
+			G_HW_MANUFACTURER='Sony UK'
+
+		elif [[ $G_HW_REVISION == *'0011' ]]; then
+
+			G_HW_MODEL_NAME='RPi CM'
+			G_HW_PCB_REVISION='1.0'
+			G_HW_MANUFACTURER='Sony UK'
+
+		elif [[ $G_HW_REVISION == *'0012' ]]; then
+
+			G_HW_MODEL=0
+			G_HW_MODEL_NAME='RPi A+'
+			G_HW_PCB_REVISION='1.1'
+			G_HW_MEMORY_SIZE=256
+			G_HW_MANUFACTURER='Sony UK'
+
+		elif [[ $G_HW_REVISION == *'0013' ]]; then
+
+			G_HW_MODEL_NAME='RPi B+'
+			G_HW_PCB_REVISION='1.2'
+			G_HW_MANUFACTURER='Embest'
+
+		elif [[ $G_HW_REVISION == *'0014' ]]; then
+
+			G_HW_MODEL_NAME='RPi CM'
+			G_HW_PCB_REVISION='1.0'
+			G_HW_MANUFACTURER='Embest'
+
+		elif [[ $G_HW_REVISION == *'0015' ]]; then
+
+			G_HW_MODEL_NAME='RPi A+'
+			G_HW_PCB_REVISION='1.1'
+			# 256M and 512M versions exist: Below estimation can be wrong, since GPU memory can take >256M on a 512M model
+			if (( $(mawk '/^MemTotal:/{print $2;exit}' /proc/meminfo) < 262144 )); then
+
+				G_HW_MODEL=0
+				G_HW_MEMORY_SIZE=256
+
+			fi
+			G_HW_MANUFACTURER='Embest'
+
+		fi
+
+	}
+
+	# NB: PLEASE ENSURE HW_MODEL INDEX ENTRIES MATCH : dietpi-installer, dietpi-obtain_hw_model, dietpi-survey_results
+	# NBB: DO NOT REORDER INDEX's. These are now fixed and will never change (due to survey results etc)
+	Obtain_HW_Info(){
+
+		# Systems that use /etc/.dietpi_hw_model_identifier for G_HW_MODEL
+		if [[ -f $FP_G_HW_MODEL_IDENTIFIER ]]; then
+
+			G_HW_MODEL=$(mawk 'NR==1' "$FP_G_HW_MODEL_IDENTIFIER")
+
+			if (( $G_HW_MODEL == 81 )); then
+
+				G_HW_MODEL_NAME='StarFive VisionFive 2'
+
+			elif (( $G_HW_MODEL == 80 )); then
+
+				G_HW_MODEL_NAME='Orange Pi 5'
+				G_HW_CPUID=11
+
+			elif (( $G_HW_MODEL == 79 )); then
+
+				G_HW_MODEL_NAME='NanoPi R6S/R6C'
+				G_HW_CPUID=11
+
+			elif (( $G_HW_MODEL == 78 )); then
+
+				G_HW_MODEL_NAME='ROCK 5B'
+				G_HW_CPUID=11
+
+			elif (( $G_HW_MODEL == 77 )); then
+
+				G_HW_MODEL_NAME='ROCK 3A'
+				G_HW_CPUID=10
+
+			elif (( $G_HW_MODEL == 76 )); then
+
+				G_HW_MODEL_NAME='NanoPi R5S/R5C'
+				G_HW_CPUID=10
+
+			elif (( $G_HW_MODEL == 75 )); then
+
+				G_HW_MODEL_NAME='Container'
+				grep -q '^ID=raspbian' /etc/os-release && G_RASPBIAN=1
+
+			elif (( $G_HW_MODEL == 74 )); then
+
+				G_HW_MODEL_NAME='Radxa Zero'
+
+			elif (( $G_HW_MODEL == 73 )); then
+
+				G_HW_MODEL_NAME='ROCK Pi S'
+
+			elif (( $G_HW_MODEL == 72 )); then
+
+				G_HW_MODEL_NAME='ROCK 4'
+				G_HW_CPUID=3
+
+			elif (( $G_HW_MODEL == 70 )); then
+
+				G_HW_MODEL_NAME='Sparky SBC'
+
+			elif (( $G_HW_MODEL == 68 )); then
+
+				G_HW_MODEL_NAME='NanoPi M4/T4/NEO4'
+				G_HW_CPUID=3
+
+			elif (( $G_HW_MODEL == 67 )); then
+
+				G_HW_MODEL_NAME='NanoPi K1 Plus'
+				G_HW_CPUID=2
+
+			elif (( $G_HW_MODEL == 66 )); then
+
+				G_HW_MODEL_NAME='NanoPi M1 Plus'
+				G_HW_CPUID=1
+
+			elif (( $G_HW_MODEL == 65 )); then
+
+				G_HW_MODEL_NAME='NanoPi NEO2'
+				G_HW_CPUID=2
+
+			elif (( $G_HW_MODEL == 64 )); then
+
+				G_HW_MODEL_NAME='NanoPi NEO Air'
+				G_HW_CPUID=1
+
+			elif (( $G_HW_MODEL == 63 )); then
+
+				G_HW_MODEL_NAME='NanoPi M1'
+				G_HW_CPUID=1
+
+			elif (( $G_HW_MODEL == 62 )); then
+
+				G_HW_MODEL_NAME='NanoPi M3/T3/Fire3'
+
+			elif (( $G_HW_MODEL == 61 )); then
+
+				G_HW_MODEL_NAME='NanoPi M2/T2'
+
+			elif (( $G_HW_MODEL == 60 )); then
+
+				G_HW_MODEL_NAME='NanoPi NEO'
+				G_HW_CPUID=1
+
+			elif (( $G_HW_MODEL == 59 )); then
+
+				G_HW_MODEL_NAME='ZeroPi'
+				G_HW_CPUID=1
+
+			elif (( $G_HW_MODEL == 58 )); then
+
+				G_HW_MODEL_NAME='NanoPi M4V2'
+				G_HW_CPUID=3
+
+			elif (( $G_HW_MODEL == 57 )); then
+
+				G_HW_MODEL_NAME='NanoPi NEO Plus2'
+				G_HW_CPUID=2
+
+			elif (( $G_HW_MODEL == 56 )); then
+
+				G_HW_MODEL_NAME='NanoPi NEO3'
+				G_HW_CPUID=6
+
+			elif (( $G_HW_MODEL == 55 )); then
+
+				G_HW_MODEL_NAME='NanoPi R2S'
+				G_HW_CPUID=6
+
+			elif (( $G_HW_MODEL == 54 )); then
+
+				G_HW_MODEL_NAME='NanoPi K2'
+				G_HW_CPUID=7
+
+			elif (( $G_HW_MODEL == 52 )); then
+
+				G_HW_MODEL_NAME='ASUS Tinker Board'
+
+			elif (( $G_HW_MODEL == 49 )); then
+
+				G_HW_MODEL_NAME='Quartz64'
+				G_HW_CPUID=9
+
+			elif (( $G_HW_MODEL == 48 )); then
+
+				G_HW_MODEL_NAME='NanoPi R1'
+				G_HW_CPUID=1
+
+			elif (( $G_HW_MODEL == 47 )); then
+
+				G_HW_MODEL_NAME='NanoPi R4S'
+				G_HW_CPUID=3
+
+			elif (( $G_HW_MODEL == 46 )); then
+
+				G_HW_MODEL_NAME='Pinebook Pro'
+				G_HW_CPUID=3
+
+			elif (( $G_HW_MODEL == 45 )); then
+
+				G_HW_MODEL_NAME='PINE H64'
+				G_HW_CPUID=5
+
+			elif (( $G_HW_MODEL == 44 )); then
+
+				G_HW_MODEL_NAME='Pinebook'
+				G_HW_CPUID=8
+
+			elif (( $G_HW_MODEL == 43 )); then
+
+				G_HW_MODEL_NAME='ROCK64'
+				G_HW_CPUID=6
+
+			elif (( $G_HW_MODEL == 42 )); then
+
+				G_HW_MODEL_NAME='ROCKPro64'
+				G_HW_CPUID=3
+
+			elif (( $G_HW_MODEL == 40 )); then
+
+				G_HW_MODEL_NAME='PINE A64'
+				G_HW_CPUID=8
+
+			elif (( $G_HW_MODEL == 29 )); then
+
+				G_HW_MODEL_NAME='Generic Amlogic S922X'
+				G_HW_CPUID=4
+
+			elif (( $G_HW_MODEL == 28 )); then
+
+				G_HW_MODEL_NAME='Generic Amlogic S905'
+				G_HW_CPUID=7
+
+			elif (( $G_HW_MODEL == 27 )); then
+
+				G_HW_MODEL_NAME='Generic Allwinner H6'
+				G_HW_CPUID=5
+
+			elif (( $G_HW_MODEL == 26 )); then
+
+				G_HW_MODEL_NAME='Generic Allwinner H5'
+				G_HW_CPUID=2
+
+			elif (( $G_HW_MODEL == 25 )); then
+
+				G_HW_MODEL_NAME='Generic Allwinner H3'
+				G_HW_CPUID=1
+
+			elif (( $G_HW_MODEL == 24 )); then
+
+				G_HW_MODEL_NAME='Generic Rockchip RK3399'
+				G_HW_CPUID=3
+
+			elif (( $G_HW_MODEL == 23 )); then
+
+				G_HW_MODEL_NAME='Generic Rockchip RK3328'
+				G_HW_CPUID=6
+
+			elif (( $G_HW_MODEL == 21 )); then
+
+				G_HW_MODEL_NAME='Native PC'
+
+			elif (( $G_HW_MODEL == 20 )); then
+
+				G_HW_MODEL_NAME='Virtual Machine'
+
+			elif (( $G_HW_MODEL == 16 )); then
+
+				G_HW_MODEL_NAME='Odroid C4/HC4'
+
+			elif (( $G_HW_MODEL == 15 )); then
+
+				G_HW_MODEL_NAME='Odroid N2'
+				G_HW_CPUID=4
+
+			elif (( $G_HW_MODEL == 13 )); then
+
+				G_HW_MODEL_NAME='Odroid U3'
+
+			elif (( $G_HW_MODEL == 12 )); then
+
+				G_HW_MODEL_NAME='Odroid C2'
+				G_HW_CPUID=7
+
+			elif (( $G_HW_MODEL == 11 )); then
+
+				G_HW_MODEL_NAME='Odroid XU3/XU4/MC1/HC1/HC2'
+
+			elif (( $G_HW_MODEL == 10 )); then
+
+				G_HW_MODEL_NAME='Odroid C1'
+
+			# Unknown hardware ID, revert to "Generic Device"
+			elif [[ $G_HW_MODEL != 22 ]]; then
+
+				G_HW_MODEL=22
+				echo "$G_HW_MODEL" > "$FP_G_HW_MODEL_IDENTIFIER"
+
+			fi
+
+		# RPi? Detect via ondisk device tree file instead of /proc content, for chroot/systemd-nspawn support
+		elif for i in /boot/bcm*-rpi-*\.dtb; do [[ -f $i ]] && break; done; then
+
+			# Detect exact RPi model
+			RPi_BoardInfo
+
+		# No hardware identifier and no RPi, revert to "Generic Device"
+		else
+
+			echo "$G_HW_MODEL" > "$FP_G_HW_MODEL_IDENTIFIER"
+
+		fi
+
+		# Get distro ID
+		local distro=$(</etc/debian_version)
+		if [[ $distro == '10.'* ]]; then
+
+			G_DISTRO=5
+			G_DISTRO_NAME='buster'
+
+		elif [[ $distro == '11.'* ]]; then
+
+			G_DISTRO=6
+			G_DISTRO_NAME='bullseye'
+
+		elif [[ $distro == '12.'* || $distro == 'bookworm/sid' ]]; then
+
+			G_DISTRO=7
+			G_DISTRO_NAME='bookworm'
+
+		fi
+
+		# Obtain CPU architecture
+		if [[ $G_HW_ARCH_NAME == 'armv6l' ]]; then
+
+			G_HW_ARCH=1
+
+		elif [[ $G_HW_ARCH_NAME == 'armv7l' ]]; then
+
+			G_HW_ARCH=2
+
+		elif [[ $G_HW_ARCH_NAME == 'aarch64' ]]; then
+
+			G_HW_ARCH=3
+
+		elif [[ $G_HW_ARCH_NAME == 'x86_64' ]]; then
+
+			G_HW_ARCH=10
+
+		elif [[ $G_HW_ARCH_NAME == 'riscv64' ]]; then
+
+			G_HW_ARCH=11
+
+		# - Unsupported by DietPi, inform user by adding 'Unsupported'
+		else
+
+			G_HW_ARCH_NAME+=' (Unsupported)'
+
+		fi
+
+		# Add CPU arch to device name
+		G_HW_MODEL_NAME+=" ($G_HW_ARCH_NAME)"
+
+		# Save data
+		echo "G_HW_MODEL=$G_HW_MODEL
+G_HW_MODEL_NAME='$G_HW_MODEL_NAME'
+G_HW_ARCH=$G_HW_ARCH
+G_HW_ARCH_NAME='$G_HW_ARCH_NAME'
+G_HW_CPUID=$G_HW_CPUID
+G_HW_CPU_CORES=$G_HW_CPU_CORES
+G_DISTRO=$G_DISTRO
+G_DISTRO_NAME='$G_DISTRO_NAME'
+G_ROOTFS_DEV='$G_ROOTFS_DEV'
+G_HW_UUID='$G_HW_UUID'" > /boot/dietpi/.hw_model
+
+		# - RPi extras
+		if (( $G_HW_MODEL < 10 ))
+		then
+			echo "G_RASPBIAN=$G_RASPBIAN
+G_HW_ONBOARD_WIFI=$G_HW_ONBOARD_WIFI
+G_HW_REVISION='$G_HW_REVISION'
+G_HW_PCB_REVISION=$G_HW_PCB_REVISION
+G_HW_MEMORY_SIZE=$G_HW_MEMORY_SIZE
+G_HW_MANUFACTURER='$G_HW_MANUFACTURER'" >> /boot/dietpi/.hw_model
+
+		elif (( $G_HW_MODEL == 75 && $G_RASPBIAN == 1 ))
+		then
+			echo 'G_RASPBIAN=1' >> /boot/dietpi/.hw_model
+		fi
+
+	}
+
+	#-----------------------------------------------------------------------------------
+	# Main
+	Obtain_HW_Info
+	#-----------------------------------------------------------------------------------
+	exit 0
+	#-----------------------------------------------------------------------------------
+}

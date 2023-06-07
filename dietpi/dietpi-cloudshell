@@ -1,0 +1,1609 @@
+#!/bin/bash
+{
+	#////////////////////////////////////
+	# DietPi CloudShell
+	#
+	#////////////////////////////////////
+	# Created by Daniel Knight / daniel.knight@dietpi.com / dietpi.com
+	#
+	#////////////////////////////////////
+	#
+	# Info:
+	# - System Stats for CloudShell (or monitor/terminal)
+	#
+	# Usage:
+	# dietpi-cloudshell			= Config Menu
+	# dietpi-cloudshell 1			= Run
+	# dietpi-cloudshell 2			= Run + Skip intro
+	#////////////////////////////////////
+
+	# Import DietPi-Globals --------------------------------------------------------------
+	. /boot/dietpi/func/dietpi-globals
+	readonly G_PROGRAM_NAME='DietPi-CloudShell'
+	G_INIT_ALLOW_CONCURRENT=1
+	G_INIT
+	# Import DietPi-Globals --------------------------------------------------------------
+
+	# Grab valid input
+	[[ $1 == [12] ]] && INPUT=$1 || INPUT=0
+
+	# Version
+	readonly DIETPI_CLOUDSHELL_VERSION=11
+
+	# Temporary file used throughout the script
+	readonly FP_TMP='.tmp'
+
+	BLANK_SCREEN_ACTIVE=0
+	BLANK_SCREEN_AT_SPECIFIC_TIME_ENABLED=0
+	BLANK_SCREEN_TIME_HOUR_START=0
+	BLANK_SCREEN_TIME_HOUR_END=0
+
+	# This will only work if dietpi-cloudshell was started via dietpi-autostart/dietpi-login, as the setterm power options can only be applied when the command originates from the same terminal without redirects.
+	RUN_BLANK_SCREEN_AT_SPECIFIC_TIME(){
+
+		local current_hour=$(date '+%-H')
+
+		# Turn screen off
+		if (( ! $BLANK_SCREEN_ACTIVE )); then
+
+			(( $BLANK_SCREEN_TIME_HOUR_START == $current_hour )) || return
+
+			clear
+			echo -e '\n\nScreen will be powered down in under 1 minute\n'
+			setterm --blank 1 --powersave on # Blank after 1 minute as force requires a poke to bring it back up
+			BLANK_SCREEN_ACTIVE=1
+
+		# Turn screen on
+		elif (( $BLANK_SCREEN_TIME_HOUR_END == $current_hour )); then
+
+			Disable_Screen_Blanking
+
+		fi
+
+	}
+
+	Disable_Screen_Blanking(){
+
+		setterm --blank poke
+		setterm --blank 0 --powersave off
+		BLANK_SCREEN_ACTIVE=0
+
+	}
+
+	# Converts a byte int to string, in human readable byte format.
+	BYTE_PRINT_CONVERSION(){
+
+		# $1=byte value
+
+		# bytes
+		if (( $1 < 1024 )); then
+
+			echo -n "$1 bytes"
+
+		# KiB
+		elif (( $1 < 1048576 )); then
+
+			printf '%.1f KiB' "$(($1*100/1024+1))e-2"
+
+		# MiB
+		elif (( $1 < 1073741824 )); then
+
+			printf '%.1f MiB' "$(($1*100/1024**2+1))e-2"
+
+		# GiB
+		elif (( $1 )); then
+
+			printf '%.1f GiB' "$(($1*100/1024**3+1))e-2"
+
+		fi
+
+	}
+
+	# Converts a byte int to string, in human readable bit format.
+	# - for network data transmission rate (LAN, WLAN, ...)
+	# - 1MB = 8Mbit | 1Mbit = 0.125MB
+	BIT_PRINT_CONVERSION(){
+
+		# $1=byte value
+
+		# bit
+		if (( $1 < 1000 )); then
+
+			echo -n "$(($1*8)) bit"
+
+		# Kbit
+		elif (( $1 < 1000000 )); then
+
+			printf '%.1f Kbit' "$(($1*800/1000+1))e-2"
+
+		# Mbit
+		elif (( $1 < 1000000000 )); then
+
+			printf '%.1f Mbit' "$(($1*800/1000**2+1))e-2"
+
+		# Gbit
+		elif (( $1 )); then
+
+			printf '%.1f Gbit' "$(($1*800/1000**3+1))e-2"
+
+		fi
+
+ 	}
+
+	Init_Term_Options(){
+
+		# Disable cursor
+		setterm --cursor off
+
+		# Store current font
+		setfont -O previous_font
+
+		# Set large font 1st (480x320+)
+		setfont Uni3-TerminusBold32x16
+
+		# Reduce font size if less than 10 lines available now (320x240)
+		(( $(tput lines) < 10 )) && setfont Uni3-TerminusBold24x12
+
+		# Disable screen blanking initially
+		Disable_Screen_Blanking
+
+	}
+
+	#/////////////////////////////////////////////////////////////////////////////////////
+	# Colours
+	#/////////////////////////////////////////////////////////////////////////////////////
+	readonly C_RESET='\e[0m'
+	readonly C_REVERSE='\e[7m'
+
+	# Colour array
+	readonly aCOLOUR=(
+
+		'\e[39m' # 0 WHITE
+		'\e[31m' # 1 RED
+		'\e[32m' # 2 GREEN
+		'\e[33m' # 3 YELLOW
+		'\e[34m' # 4 BLUE
+		'\e[35m' # 5 PURPLE
+		'\e[36m' # 6 CYAN
+
+	)
+
+	# User colour
+	USER_COLOUR_INDEX=3
+
+	C_PERCENT_GRAPH=0
+	Percent_To_Graph(){
+
+		# $1 = int/float 0-100
+		#$C_PERCENT_GRAPH = return text
+
+		# Convert to int
+		local input_value=${1%.*}
+
+		# Cap input value
+		if (( $input_value > 100 )); then
+
+			input_value=100
+
+		elif (( $input_value < 0 )); then
+
+			input_value=0
+
+		fi
+
+		# Work out a percentage based graph
+		# 18 step split (18 / 100)
+		if (( $input_value >= 95 )); then
+
+			C_PERCENT_GRAPH=" $input_value% [$C_REVERSE${aCOLOUR[1]}------WARNING-----$C_RESET]"
+
+		elif (( $input_value >= 90 )); then
+
+			C_PERCENT_GRAPH=" $input_value% [$C_REVERSE${aCOLOUR[1]}-----------------$C_RESET-]"
+
+		elif (( $input_value >= 88 )); then
+
+			C_PERCENT_GRAPH=" $input_value% [$C_REVERSE${aCOLOUR[1]}----------------$C_RESET--]"
+
+		elif (( $input_value >= 82 )); then
+
+			C_PERCENT_GRAPH=" $input_value% [$C_REVERSE${aCOLOUR[1]}---------------$C_RESET---]"
+
+		elif (( $input_value >= 76 )); then
+
+			C_PERCENT_GRAPH=" $input_value% [$C_REVERSE${aCOLOUR[3]}--------------$C_RESET----]"
+
+		elif (( $input_value >= 70 )); then
+
+			C_PERCENT_GRAPH=" $input_value% [$C_REVERSE${aCOLOUR[3]}-------------$C_RESET-----]"
+
+		elif (( $input_value >= 64 )); then
+
+			C_PERCENT_GRAPH=" $input_value% [$C_REVERSE${aCOLOUR[3]}------------$C_RESET------]"
+
+		elif (( $input_value >= 56 )); then
+
+			C_PERCENT_GRAPH=" $input_value% [$C_REVERSE${aCOLOUR[3]}-----------$C_RESET-------]"
+
+		elif (( $input_value >= 50 )); then
+
+			C_PERCENT_GRAPH=" $input_value% [$C_REVERSE${aCOLOUR[3]}----------$C_RESET--------]"
+
+		elif (( $input_value >= 44 )); then
+
+			C_PERCENT_GRAPH=" $input_value% [$C_REVERSE${aCOLOUR[3]}---------$C_RESET---------]"
+
+		elif (( $input_value >= 38 )); then
+
+			C_PERCENT_GRAPH=" $input_value% [$C_REVERSE${aCOLOUR[2]}--------$C_RESET----------]"
+
+		elif (( $input_value >= 32 )); then
+
+			C_PERCENT_GRAPH=" $input_value% [$C_REVERSE${aCOLOUR[2]}-------$C_RESET-----------]"
+
+		elif (( $input_value >= 26 )); then
+
+			C_PERCENT_GRAPH=" $input_value% [$C_REVERSE${aCOLOUR[2]}------$C_RESET------------]"
+
+		elif (( $input_value >= 20 )); then
+
+			C_PERCENT_GRAPH=" $input_value% [$C_REVERSE${aCOLOUR[2]}-----$C_RESET-------------]"
+
+		elif (( $input_value >= 15 )); then
+
+			C_PERCENT_GRAPH=" $input_value% [$C_REVERSE${aCOLOUR[2]}----$C_RESET--------------]"
+
+		elif (( $input_value >= 10 )); then
+
+			C_PERCENT_GRAPH=" $input_value% [$C_REVERSE${aCOLOUR[2]}---$C_RESET---------------]"
+
+		elif (( $input_value >= 5 )); then
+
+			C_PERCENT_GRAPH=" $input_value%  [$C_REVERSE${aCOLOUR[2]}--$C_RESET----------------]"
+
+		else
+
+			C_PERCENT_GRAPH=" $input_value%  [$C_REVERSE${aCOLOUR[2]}-$C_RESET-----------------]"
+
+		fi
+
+	}
+
+	#/////////////////////////////////////////////////////////////////////////////////////
+	# Obtain Stat Data
+	#/////////////////////////////////////////////////////////////////////////////////////
+	TEMPERATURE_CONVERSION_VALUE=
+	Obtain_Temperature_Conversion(){
+
+		if (( $TEMPERATURE_OUTPUT_TYPE == 0 )); then
+
+			TEMPERATURE_CONVERSION_VALUE=$(mawk "BEGIN {printf \"%.0f\",$TEMPERATURE_CONVERSION_VALUE * 1.8 + 32}")
+			TEMPERATURE_CONVERSION_VALUE+="'f"
+
+		else
+
+			TEMPERATURE_CONVERSION_VALUE+="'c"
+
+		fi
+
+	}
+
+	DATE_TIME=
+	Obtain_DATE_TIME(){ DATE_TIME=$(date +"%a %x - %R"); }
+
+	UPTIME=
+	Obtain_UPTIME(){
+
+		local seconds=$(mawk -F\. '{print $1}' /proc/uptime)
+		UPTIME="Uptime: $(( $seconds / 86400 )) Day, $(( $seconds % 86400 / 3600)) Hour"
+
+	}
+
+	# CPU
+	CPU_GOV='N/A'
+	CPU_TEMP=0
+	C_CPUTEMP=
+	CPU_FREQ_1='N/A'
+	CPU_FREQ_2='N/A'
+	CPU_USAGE=0
+	CPU_TOTALPROCESSES=0
+	Obtain_CPU(){
+
+		CPU_TOTALPROCESSES=$(( $(ps --ppid 2 -p 2 --deselect | wc -l) - 2 )) # ps process and descriptions
+		[[ -f '/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor' ]] && CPU_GOV=$(</sys/devices/system/cpu/cpu0/cpufreq/scaling_governor)
+		CPU_TEMP=$(G_OBTAIN_CPU_TEMP)
+
+		if disable_error=1 G_CHECK_VALIDINT "$CPU_TEMP"; then
+
+			# Obtain colour for temps
+			if (( $CPU_TEMP >= 65 )); then
+
+				C_CPUTEMP=${aCOLOUR[1]}
+
+			elif (( $CPU_TEMP >= 50 )); then
+
+				C_CPUTEMP=${aCOLOUR[3]}
+
+			elif (( $CPU_TEMP >= 35 )); then
+
+				C_CPUTEMP=${aCOLOUR[2]}
+
+			else
+
+				C_CPUTEMP=${aCOLOUR[4]}
+
+			fi
+
+			# Set 'c or 'f output
+			TEMPERATURE_CONVERSION_VALUE=$CPU_TEMP
+			Obtain_Temperature_Conversion
+			CPU_TEMP=$TEMPERATURE_CONVERSION_VALUE
+
+		fi
+
+		[[ -f '/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq' ]] && CPU_FREQ_1=$(( $(</sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq) / 1000 ))
+		CPU_FREQ_2='N/A'
+
+		# Unique additional freq readout for Odroid XU4 (octo, 2nd quad set)
+		(( $G_HW_MODEL == 11 )) && CPU_FREQ_2=$(( $(</sys/devices/system/cpu/cpu4/cpufreq/scaling_cur_freq) / 1000 ))
+
+		CPU_USAGE=$(G_OBTAIN_CPU_USAGE)
+
+		# Convert to interger and graph it
+		Percent_To_Graph "$CPU_USAGE"
+		CPU_USAGE=$C_PERCENT_GRAPH
+
+	}
+
+	# Storage
+	# - array
+	readonly MAX_STORAGE=6
+	STORAGE_TOTAL=()
+	STORAGE_USED=()
+	STORAGE_FREE=()
+	STORAGE_PERCENT=()
+	STORAGE_PATH=()
+	STORAGE_NAME=()
+
+	Init_STORAGE(){
+
+		for ((i=0; i<$MAX_STORAGE; i++))
+		do
+
+			STORAGE_TOTAL[$i]='N/A'
+			STORAGE_USED[$i]='N/A'
+			STORAGE_FREE[$i]='N/A'
+			STORAGE_PERCENT[$i]=' Not installed'
+			STORAGE_NAME[$i]=0
+
+			# 0 reserved for flash storage
+			if (( $i == 0 )); then
+
+				STORAGE_PATH[$i]='/'
+				STORAGE_NAME[$i]='Flash/RootFS Storage:    '
+
+			else
+
+				STORAGE_PATH[$i]="/mnt/usb_$i"
+				STORAGE_NAME[$i]="Storage $i:               "
+
+			fi
+
+		done
+
+	}
+
+	# $1 $2 = Range of indexs to update (eg: 0-1)
+	Obtain_STORAGE(){
+
+		local index_start=$1
+		local index_end=$2
+
+		# df will endless hang when NFS server is down: https://github.com/MichaIng/DietPi/issues/395
+		# - So lets run it as another thread so we can kill it if it hangs.
+		local df_failed=0 pid
+		[[ -f $FP_TMP ]] && rm "$FP_TMP"
+		df -Ph > "$FP_TMP" & pid=$!
+
+		# - Wait X seconds before terminating the df thread
+		local max_seconds=4
+		local current_seconds=0
+		until [[ -f $FP_TMP ]]
+		do
+
+			# kill
+			if (( $current_seconds >= $max_seconds )); then
+
+				G_DIETPI-NOTIFY 1 'DF failed, unable to obtain drive data'
+				G_SLEEP 2
+				kill "$pid"
+				df_failed=1
+				echo -e "$(date) | df failed to respond" >> /var/log/dietpi-cloudshell.log
+				break
+
+			else
+
+				G_SLEEP 1
+				((current_seconds++))
+
+			fi
+
+		done
+
+		if (( $df_failed )); then
+
+			for ((i=$index_start; i<=$index_end; i++))
+			do
+
+				STORAGE_PERCENT[$i]=${STORAGE_PATH[$i]}
+				STORAGE_FREE[$i]='DF failed'
+
+			done
+
+		else
+
+			for ((i=$index_start; i<=$index_end; i++))
+			do
+
+				if grep -q "${STORAGE_PATH[$i]}\$" "$FP_TMP"; then
+
+					STORAGE_TOTAL[$i]=$(grep -m1 "${STORAGE_PATH[$i]}\$" "$FP_TMP" | mawk '{print $2}'); STORAGE_TOTAL[$i]+='B'
+					STORAGE_USED[$i]=$(grep -m1 "${STORAGE_PATH[$i]}\$" "$FP_TMP" | mawk '{print $3}'); STORAGE_USED[$i]+='B'
+					STORAGE_FREE[$i]=$(grep -m1 "${STORAGE_PATH[$i]}\$" "$FP_TMP" | mawk '{print $4}'); STORAGE_FREE[$i]+='B'
+					STORAGE_PERCENT[$i]=$(grep -m1 "${STORAGE_PATH[$i]}\$" "$FP_TMP" | mawk '{print $5}' | sed 's/%//g')
+
+					Percent_To_Graph "${STORAGE_PERCENT[$i]}"
+					STORAGE_PERCENT[$i]=$C_PERCENT_GRAPH
+
+				else
+
+					STORAGE_PERCENT[$i]=${STORAGE_PATH[$i]}
+					STORAGE_FREE[$i]='Mount not active'
+
+				fi
+
+			done
+
+		fi
+
+	}
+
+	# DietPi
+	DIETPI_VERSION_CURRENT=0
+	DIETPI_UPDATE_AVAILABLE=0
+	DIETPI_WEBSITE='dietpi.com'
+	DIETPI_TWITTER='@DietPi_'
+	Obtain_DIETPIINFO(){
+
+		# DietPi version
+		DIETPI_VERSION_CURRENT="${aCOLOUR[2]}$G_DIETPI_VERSION_CORE.$G_DIETPI_VERSION_SUB$C_RESET"
+
+		# DietPi-Update available?
+		DIETPI_UPDATE_AVAILABLE='N/A'
+		if [[ -f '/run/dietpi/.update_available' ]]; then
+
+			# Set current version to red
+			DIETPI_VERSION_CURRENT="${aCOLOUR[1]}$G_DIETPI_VERSION_CORE.$G_DIETPI_VERSION_SUB$C_RESET"
+
+			local update_version=$(</run/dietpi/.update_available)
+			if [[ $update_version == '-1' ]]; then
+
+				DIETPI_UPDATE_AVAILABLE="${aCOLOUR[2]}New Image$C_RESET"
+
+			else
+
+				DIETPI_UPDATE_AVAILABLE="${aCOLOUR[2]}$update_version$C_RESET"
+
+			fi
+
+		fi
+
+	}
+
+	# Network Details
+	NETWORK_DETAILS_ADAPTER='eth0'
+	NETWORK_DETAILS_IP_INT=0
+	NETWORK_DETAILS_MAC_ADDRESS=0
+	NETWORK_DETAILS_SIGNAL_STRENGTH=0
+	NETWORK_DETAILS_DUPLEXSPEED=0
+	NETWORK_DETAILS_HOSTNAME=0
+	NETWORK_DETAILS_MODE=0 # 1=DHCP, 0=static
+	Obtain_NETWORK_DETAILS()
+	{
+		# Hostname
+		NETWORK_DETAILS_HOSTNAME=$(hostname)
+
+		# Active network adapter
+		NETWORK_DETAILS_ADAPTER=$(G_GET_NET iface)
+
+		# Mode: DHCP/static
+		grep -q "iface $NETWORK_DETAILS_ADAPTER inet dhcp" /etc/network/interfaces && NETWORK_DETAILS_MODE='DHCP' || NETWORK_DETAILS_MODE='Static'
+
+		# IP / MAC addresses
+		NETWORK_DETAILS_IP_INT=$(G_GET_NET ip)
+		NETWORK_DETAILS_MAC_ADDRESS=$(<"/sys/class/net/$NETWORK_DETAILS_ADAPTER/address")
+
+		# Speed/Strength
+		# - WiFi
+		if [[ $NETWORK_DETAILS_ADAPTER == 'wlan'* ]]
+		then
+			NETWORK_DETAILS_SIGNAL_STRENGTH=$(iw dev "$NETWORK_DETAILS_ADAPTER" link | mawk '$1=="signal:"{print $2;exit}')
+			# Try and detect if this is dBm (contains -) or %
+			disable_error=1 G_CHECK_VALIDINT "$NETWORK_DETAILS_SIGNAL_STRENGTH" -500 -1 && NETWORK_DETAILS_SIGNAL_STRENGTH+=' dBm' || NETWORK_DETAILS_SIGNAL_STRENGTH+=' %'
+			NETWORK_DETAILS_DUPLEXSPEED="$(iw dev "$NETWORK_DETAILS_ADAPTER" link | mawk '$1$2=="txbitrate:"{print $3;exit}') Mbit"
+
+		# - Ethernet
+		else
+			NETWORK_DETAILS_DUPLEXSPEED="$(<"/sys/class/net/$NETWORK_DETAILS_ADAPTER/speed") Mbit"
+			NETWORK_DETAILS_SIGNAL_STRENGTH='N/A'
+		fi
+	}
+
+	# Network Usage (all values are in bytes)
+	NETWORK_USAGE_TOTAL_CURRENT_SENT=0
+	NETWORK_USAGE_TOTAL_CURRENT_RECIEVED=0
+
+	NETWORK_USAGE_NOW_CURRENT_SENT=0
+	NETWORK_USAGE_NOW_CURRENT_RECIEVED=0
+	NETWORK_USAGE_NOW_INIT=0
+	NETWORK_USAGE_SECONDS_SINCE_LAST_UPDATE=0
+
+	NETWORK_USAGE_DAY_CURRENT_SENT=0
+	NETWORK_USAGE_DAY_CURRENT_RECIEVED=0
+	NETWORK_USAGE_DAY_PREVIOUS_SENT=0
+	NETWORK_USAGE_DAY_PREVIOUS_RECIEVED=0
+	NETWORK_USAGE_DAY_OF_MONTH=-1
+
+	Obtain_NETWORK_USAGE(){
+
+		local network_usage_current_recieved=$(<"/sys/class/net/$NETWORK_DETAILS_ADAPTER/statistics/rx_bytes")
+		local network_usage_current_sent=$(<"/sys/class/net/$NETWORK_DETAILS_ADAPTER/statistics/tx_bytes")
+
+		# Check for valid integer scrapes, before running calculations: https://dietpi.com/phpbb/viewtopic.php?p=1927#p1927 | https://github.com/MichaIng/DietPi/issues/355
+		if disable_error=1 G_CHECK_VALIDINT "$network_usage_current_recieved" && disable_error=1 G_CHECK_VALIDINT "$network_usage_current_sent"; then
+
+			# Store previous totals
+			local total_previous_sent=$NETWORK_USAGE_TOTAL_CURRENT_SENT
+			local total_previous_recieved=$NETWORK_USAGE_TOTAL_CURRENT_RECIEVED
+
+			# Update current totals
+			NETWORK_USAGE_TOTAL_CURRENT_RECIEVED=$network_usage_current_recieved
+			NETWORK_USAGE_TOTAL_CURRENT_SENT=$network_usage_current_sent
+
+			# Current usage
+			# - Work out seconds since last update
+			local seconds_since_last_update=$(( $(date +%s) - $NETWORK_USAGE_SECONDS_SINCE_LAST_UPDATE ))
+
+			# - Init - Override current usage to 0, on first run of scene.
+			if (( $NETWORK_USAGE_NOW_INIT == 0 )); then
+
+				NETWORK_USAGE_NOW_CURRENT_SENT=0
+				NETWORK_USAGE_NOW_CURRENT_RECIEVED=0
+
+				NETWORK_USAGE_NOW_INIT=1
+
+			# - Obtain current usage
+			else
+
+				NETWORK_USAGE_NOW_CURRENT_SENT=$(( ( $NETWORK_USAGE_TOTAL_CURRENT_SENT - $total_previous_sent ) / $seconds_since_last_update ))
+				NETWORK_USAGE_NOW_CURRENT_RECIEVED=$(( ( $NETWORK_USAGE_TOTAL_CURRENT_RECIEVED - $total_previous_recieved ) / $seconds_since_last_update ))
+
+			fi
+
+			# - Update timestamp
+			NETWORK_USAGE_SECONDS_SINCE_LAST_UPDATE=$(date +%s)
+
+			# Usage today
+			# - Has the day changed? Also runs on init.
+			#	String if statement, to prevent "leading zero integer error" from $(date): https://github.com/MichaIng/DietPi/issues/272
+			local dayofmonth=$(date +"%d")
+			if [[ $NETWORK_USAGE_DAY_OF_MONTH != "$dayofmonth" ]]; then
+
+				# Update previous day values to current
+				NETWORK_USAGE_DAY_PREVIOUS_SENT=$NETWORK_USAGE_TOTAL_CURRENT_SENT
+				NETWORK_USAGE_DAY_PREVIOUS_RECIEVED=$NETWORK_USAGE_TOTAL_CURRENT_RECIEVED
+				NETWORK_USAGE_DAY_OF_MONTH=$dayofmonth
+
+			fi
+
+			# - Work out todays usage
+			NETWORK_USAGE_DAY_CURRENT_SENT=$(( $NETWORK_USAGE_TOTAL_CURRENT_SENT - $NETWORK_USAGE_DAY_PREVIOUS_SENT ))
+			NETWORK_USAGE_DAY_CURRENT_RECIEVED=$(( $NETWORK_USAGE_TOTAL_CURRENT_RECIEVED - $NETWORK_USAGE_DAY_PREVIOUS_RECIEVED ))
+
+		fi
+
+	}
+
+	# Memory
+	MEMORY_TOTAL=0
+	MEMORY_FREE=0
+	MEMORY_USED=0
+	MEMORY_PERCENT=0
+	MEMORY_SWAPTOTAL=0
+	MEMORY_SWAPUSED=0
+	MEMORY_SWAPFREE=0
+	MEMORY_SWAPERCENT=0
+	Obtain_MEMORY(){
+
+		# Write to tmp
+		free -m > "$FP_TMP"
+
+		# RAM MiB
+		MEMORY_TOTAL=$(mawk '/Mem: /{print $2;exit}' "$FP_TMP")
+		MEMORY_USED=$(mawk '/Mem: /{print $3;exit}' "$FP_TMP")
+		MEMORY_FREE=$(mawk '/Mem: /{print $7;exit}' "$FP_TMP")
+		MEMORY_PERCENT=$(mawk "{print $MEMORY_USED * 100 / $MEMORY_TOTAL}" <<< '')
+
+		# convert to interger and graph it
+		Percent_To_Graph "$MEMORY_PERCENT"
+		MEMORY_PERCENT=$C_PERCENT_GRAPH
+
+		# SWAP MiB
+		MEMORY_SWAPTOTAL=$(mawk '/Swap: /{print $2;exit}' "$FP_TMP")
+		# - Swap available and active
+		if (( $MEMORY_SWAPTOTAL > 0 )); then
+
+			MEMORY_SWAPUSED=$(mawk '/Swap: /{print $3;exit}' "$FP_TMP")
+			MEMORY_SWAPFREE=$(mawk '/Swap: /{print $4;exit}' "$FP_TMP")
+			MEMORY_SWAPERCENT=$(mawk "{print $MEMORY_SWAPUSED * 100 / $MEMORY_SWAPTOTAL}" <<< '')
+
+			# convert to interger and graph it
+			Percent_To_Graph "$MEMORY_SWAPERCENT"
+			MEMORY_SWAPERCENT=$C_PERCENT_GRAPH
+
+		else
+
+			MEMORY_SWAPERCENT=' Disabled'
+
+		fi
+
+	}
+
+	# Pi-hole stats
+	PIHOLE_QUERY_COUNT=0
+	PIHOLE_TOTAL_ADS=0
+	PIHOLE_PERCENT_ADS=
+	PIHOLE_TOTAL_DOMAINS=0
+	PIHOLE_LAST_DOMAIN_BLOCKED=
+	PIHOLE_API_PORT=
+	Obtain_PIHOLE(){
+
+		# Pi-hole FTL API:
+		# - https://github.com/pi-hole/pi-hole/blob/development/advanced/Scripts/chronometer.sh
+		# - https://docs.pi-hole.net/ftldns/telnet-api/
+
+		# Get FTL API port if not obtained before
+		if [[ ! $PIHOLE_API_PORT ]]
+		then
+			[[ -f '/etc/pihole/pihole-FTL.conf' ]] || { first_line="${aCOLOUR[1]}$C_REVERSE Pi-hole is not installed "; return; }
+			PIHOLE_API_PORT=$(sed -n '/^[[:blank:]]*FTLPORT=[[:digit:]]*$/{s/^[^=]*=//p;q}' /etc/pihole/pihole-FTL.conf)
+			[[ $PIHOLE_API_PORT ]] || PIHOLE_API_PORT=4711 # default
+		fi
+
+		# Establish connection / Create file descriptors
+     		exec 3<>"/dev/tcp/127.0.0.1/$PIHOLE_API_PORT"
+
+		# Exit if connection fails
+		>&3 || { first_line="${aCOLOUR[1]}$C_REVERSE Pi-hole connection failed"; return; }
+
+		# Ask FTL for last blocked domain and to quit when finished
+		echo '>recentBlocked >quit' >&3
+		# Read last blocked domain, allowing 1 second timeout
+		read -r -t 1 PIHOLE_LAST_DOMAIN_BLOCKED <&3
+
+		# Re-establish connection, then ask FTL for stats and to quit when finished
+		exec 3<>"/dev/tcp/127.0.0.1/$PIHOLE_API_PORT"
+		echo '>stats >quit' >&3
+
+		# Read output, allowing 1 second timeout per line, exit on empty string when connection is closed
+		while read -r -t 1 line && [[ $line || -t 3 ]]
+		do
+			if [[ $line == 'domains_being_blocked '* ]]
+			then
+				PIHOLE_TOTAL_DOMAINS=${line#* }
+
+			elif [[ $line == 'dns_queries_today '* ]]
+			then
+				PIHOLE_QUERY_COUNT=${line#* }
+
+			elif [[ $line == 'ads_blocked_today '* ]]
+			then
+				PIHOLE_TOTAL_ADS=${line#* }
+			fi
+		done <&3
+
+		# Close connection / Remove file descriptors
+		exec 3>&-
+		exec 3<&-
+
+		# Calculate percentage of blocked queries and convert to graph
+		Percent_To_Graph $(( $PIHOLE_QUERY_COUNT ? $PIHOLE_TOTAL_ADS * 100 / $PIHOLE_QUERY_COUNT : 0 ))
+		PIHOLE_PERCENT_ADS=$C_PERCENT_GRAPH
+
+	}
+
+	#/////////////////////////////////////////////////////////////////////////////////////
+	# Scene Settings
+	#/////////////////////////////////////////////////////////////////////////////////////
+	(( $INPUT == 1 )) && RUN_INTRO=1 || RUN_INTRO=0
+
+	# SCENE INDEXS
+	SCENE_CURRENT=2
+	MAX_SCENES=10
+
+	# Refresh rate (every X seconds)
+	REFRESH_RATE=5
+
+	# 0='f | 1='c
+	TEMPERATURE_OUTPUT_TYPE=1
+
+	# 0=bit (Mbit) | 1=byte (MiB)
+	NETWORK_USAGE_CURRENT_OUTPUT_TYPE=0
+
+	# Enabled Scenes
+	aEnabledScenes=()
+	for ((i=0; i<$MAX_SCENES; i++))
+	do
+
+		aEnabledScenes[$i]=1
+
+	done
+
+	#/////////////////////////////////////////////////////////////////////////////////////
+	# Scene Print / Update
+	#/////////////////////////////////////////////////////////////////////////////////////
+	Run_Intro(){
+
+		local aAnimation=(
+
+			'                          '
+			'i         -              c'
+			'P  i      -            c l'
+			't  P  i   -          c l o'
+			'e  t  P  i-        c l o u'
+			'i  e  t Pi-    c l o u d s'
+			'D  i  etPi-  c l o u d s h'
+			'  D  ietPi-c l o u d s h e'
+			'    DietPi-cl o u d s h e '
+			'    DietPi-clou d s h e l '
+			'    DietPi-clouds h e l l '
+			'    DietPi-cloudshe l l   '
+			'    DietPi-cloudshell     '
+
+		)
+
+		local aBar=(
+
+			' '
+			'  '
+			'    '
+			'       '
+			'         '
+			'            '
+			'               '
+			'                 '
+			'                    '
+			'                      '
+			'                        '
+			'                         '
+			'                          '
+
+		)
+
+		for ((i=0; i<${#aAnimation[@]}; i++))
+		do
+
+			clear
+			echo -e "$C_RESET\n\n\n"
+			echo -e "${aCOLOUR[$USER_COLOUR_INDEX]}${aAnimation[$i]}$C_RESET"
+			echo -e "          v$DIETPI_CLOUDSHELL_VERSION"
+			echo -e '\n       Loading...'
+			echo -e "${aCOLOUR[$USER_COLOUR_INDEX]}$C_REVERSE${aBar[$i]}$C_RESET"
+
+			G_SLEEP 0.2
+
+		done
+
+		G_SLEEP 0.1
+
+	}
+
+	# Top banner
+	BANNER_PRINT=0
+	BANNER_MODE=0
+	Update_Banner(){
+
+		# Banner Modes
+		if (( $BANNER_MODE == 0 )); then
+
+			BANNER_PRINT="DietPi - CloudShell v$DIETPI_CLOUDSHELL_VERSION"
+
+		elif (( $BANNER_MODE == 1 )); then
+
+			Obtain_DATE_TIME
+			BANNER_PRINT=$DATE_TIME
+
+		elif (( $BANNER_MODE == 2 )); then
+
+			Obtain_UPTIME
+			BANNER_PRINT=$UPTIME
+
+		fi
+
+		# Set next index
+		((BANNER_MODE++))
+
+		# Cap
+		(( $BANNER_MODE < 3 )) || BANNER_MODE=0
+
+	}
+
+	# CPU
+	Update_Scene_0(){
+
+		# Update data
+		Obtain_CPU
+
+		# Clear screen
+		clear
+
+		# Banner
+		echo -e "$C_RESET $BANNER_PRINT"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]}$C_REVERSE CPU Usage:               "
+		echo -e "$C_RESET$CPU_USAGE"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]}$C_REVERSE CPU Stats:               "
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Temp      ${aCOLOUR[$USER_COLOUR_INDEX]}:$C_RESET  $C_CPUTEMP$CPU_TEMP"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Processes ${aCOLOUR[$USER_COLOUR_INDEX]}:$C_RESET  $CPU_TOTALPROCESSES"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Governor  ${aCOLOUR[$USER_COLOUR_INDEX]}:$C_RESET  $CPU_GOV"
+
+		# XU3/4 unique octo quad sets
+		if (( $G_HW_MODEL == 11 )); then
+
+			echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Freq 0-3  ${aCOLOUR[$USER_COLOUR_INDEX]}:$C_RESET  $CPU_FREQ_1 mhz"
+			echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Freq 4-7  ${aCOLOUR[$USER_COLOUR_INDEX]}:$C_RESET  $CPU_FREQ_2 mhz"
+
+		# Generic CPU hardware
+		else
+
+			echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Freq      ${aCOLOUR[$USER_COLOUR_INDEX]}:$C_RESET  $CPU_FREQ_1 mhz"
+
+		fi
+
+	}
+
+	# $1 $2 = Storage index's to update and display (must be a range of 1 , eg: 0-1 1-2 3-4)
+	Update_Scene_1(){
+
+		local index_1=$1
+		local index_2=$2
+
+		# Update data
+		Obtain_STORAGE "$index_1" "$index_2"
+
+		# Clear screen
+		clear
+
+		# Banner
+		echo -e "$C_RESET $BANNER_PRINT"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]}$C_REVERSE ${STORAGE_NAME[$index_1]}"
+		echo -e "$C_RESET${STORAGE_PERCENT[$index_1]}"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Used: $C_RESET${STORAGE_USED[$index_1]} / ${STORAGE_TOTAL[$index_1]}"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Free: $C_RESET${STORAGE_FREE[$index_1]}"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]}$C_REVERSE ${STORAGE_NAME[$index_2]}"
+		echo -e "$C_RESET${STORAGE_PERCENT[$index_2]}"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Used: $C_RESET${STORAGE_USED[$index_2]} / ${STORAGE_TOTAL[$index_2]}"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Free: $C_RESET${STORAGE_FREE[$index_2]}"
+
+	}
+
+	# DietPi
+	Update_Scene_4(){
+
+		# Update data
+		Obtain_DIETPIINFO
+
+		# Clear screen
+		clear
+
+		# Banner
+		echo -e "$C_RESET $BANNER_PRINT"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]}$C_REVERSE DietPi:                  "
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Version   ${aCOLOUR[$USER_COLOUR_INDEX]}:$C_RESET  $DIETPI_VERSION_CURRENT"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Updates   ${aCOLOUR[$USER_COLOUR_INDEX]}:$C_RESET  $DIETPI_UPDATE_AVAILABLE"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Web       ${aCOLOUR[$USER_COLOUR_INDEX]}:$C_RESET  $DIETPI_WEBSITE"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Twitter   ${aCOLOUR[$USER_COLOUR_INDEX]}:$C_RESET  $DIETPI_TWITTER"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]}$C_REVERSE Device:                  "
+		echo -e "$C_RESET $G_HW_MODEL_NAME"
+
+	}
+
+	# NETWORK DETAILS
+	Update_Scene_5(){
+
+		# Update data
+		Obtain_NETWORK_DETAILS
+
+		# Clear screen
+		clear
+
+		# Banner
+		echo -e "$C_RESET $BANNER_PRINT"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]}$C_REVERSE Network Details:         "
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} IP      : $C_RESET$NETWORK_DETAILS_IP_INT"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Mode    : $C_RESET$NETWORK_DETAILS_MODE"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Adapter : $C_RESET$NETWORK_DETAILS_ADAPTER"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Duplex  : $C_RESET$NETWORK_DETAILS_DUPLEXSPEED"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Signal  : $C_RESET$NETWORK_DETAILS_SIGNAL_STRENGTH"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Hostname: $C_RESET$NETWORK_DETAILS_HOSTNAME"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} MAC: $C_RESET$NETWORK_DETAILS_MAC_ADDRESS"
+
+	}
+
+	# NETWORK USAGE
+	Update_Scene_6(){
+
+		# Update data
+		Obtain_NETWORK_USAGE
+
+		# - Convert usage values into human readable format. Run before clearing screen due to additional processing (delay)
+		local total_sent_output=$(BYTE_PRINT_CONVERSION "$NETWORK_USAGE_TOTAL_CURRENT_SENT")
+		local total_recieved_output=$(BYTE_PRINT_CONVERSION "$NETWORK_USAGE_TOTAL_CURRENT_RECIEVED")
+
+		local today_sent_output=$(BYTE_PRINT_CONVERSION "$NETWORK_USAGE_DAY_CURRENT_SENT")
+		local today_recieved_output=$(BYTE_PRINT_CONVERSION "$NETWORK_USAGE_DAY_CURRENT_RECIEVED")
+
+		local now_sent_output=0
+		local now_recieved_output=0
+		if (( $NETWORK_USAGE_CURRENT_OUTPUT_TYPE == 0 )); then
+
+			now_sent_output=$(BIT_PRINT_CONVERSION "$NETWORK_USAGE_NOW_CURRENT_SENT")
+			now_recieved_output=$(BIT_PRINT_CONVERSION "$NETWORK_USAGE_NOW_CURRENT_RECIEVED")
+
+		else
+
+			now_sent_output=$(BYTE_PRINT_CONVERSION "$NETWORK_USAGE_NOW_CURRENT_SENT")
+			now_recieved_output=$(BYTE_PRINT_CONVERSION "$NETWORK_USAGE_NOW_CURRENT_RECIEVED")
+
+		fi
+
+		# Clear screen
+		clear
+
+		# Banner
+		# - Banner does not fit this scene (>= 9 lines)
+		#echo -e "$C_RESET $BANNER_PRINT"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]}$C_REVERSE Network Usage (TOTAL):   "
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Sent     : $C_RESET$total_sent_output"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Recieved : $C_RESET$total_recieved_output"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]}$C_REVERSE Network Usage (TODAY):   "
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Sent     : $C_RESET$today_sent_output"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Recieved : $C_RESET$today_recieved_output"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]}$C_REVERSE Network Usage (CURRENT): "
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Sent     : $C_RESET$now_sent_output/s"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Recieved : $C_RESET$now_recieved_output/s"
+
+	}
+
+	# Memory
+	Update_Scene_7(){
+
+		# Update data
+		Obtain_MEMORY
+
+		# Clear screen
+		clear
+
+		# Banner
+		echo -e "$C_RESET $BANNER_PRINT"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]}$C_REVERSE Memory Usage (RAM):      "
+		echo -e "$C_RESET$MEMORY_PERCENT"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Used: $C_RESET$MEMORY_USED MB / $MEMORY_TOTAL MB"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Free: $C_RESET$MEMORY_FREE MB"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]}$C_REVERSE Memory Usage (SWAP):     "
+		echo -e "$C_RESET$MEMORY_SWAPERCENT"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Used: $C_RESET$MEMORY_SWAPUSED MB / $MEMORY_SWAPTOTAL MB"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Free: $C_RESET$MEMORY_SWAPFREE MB"
+
+	}
+
+	# Pi-hole
+	Update_Scene_8(){
+
+		# Update data, replace first output line with error message in case of failure
+		local first_line=" $BANNER_PRINT"
+		Obtain_PIHOLE
+
+		# Clear screen
+		clear
+
+		# Banner
+		echo -e "$C_RESET$first_line"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]}$C_REVERSE Pi-hole stats (TODAY):   "
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Ads Blocked: $C_RESET$PIHOLE_TOTAL_ADS"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} DNS Queries: $C_RESET$PIHOLE_QUERY_COUNT"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]} Blocked Domains: $C_RESET$PIHOLE_TOTAL_DOMAINS"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]}$C_REVERSE % of traffic = Ads:      "
+		echo -e "$C_RESET$PIHOLE_PERCENT_ADS"
+		echo -e "$C_RESET${aCOLOUR[$USER_COLOUR_INDEX]}$C_REVERSE Last domain blocked:     "
+		echo -e "$C_RESET $PIHOLE_LAST_DOMAIN_BLOCKED"
+
+	}
+
+	# Tor Relay: Switch to nyx TTY, if not already there
+	NYX_PID=
+	NYX_ACTIVE=
+	Update_Scene_9(){ [[ $NYX_ACTIVE ]] || { chvt 9; NYX_ACTIVE=1; }; }
+
+	#/////////////////////////////////////////////////////////////////////////////////////
+	# Settings File
+	#/////////////////////////////////////////////////////////////////////////////////////
+	readonly FP_SETTINGS='/boot/dietpi/.dietpi-cloudshell'
+
+	# shellcheck disable=SC1090
+	Read_Settings_File(){ [[ -f $FP_SETTINGS ]] && . "$FP_SETTINGS"; }
+
+	Write_Settings_File(){
+
+		cat << _EOF_ > "$FP_SETTINGS"
+REFRESH_RATE=$REFRESH_RATE
+USER_COLOUR_INDEX=$USER_COLOUR_INDEX
+TEMPERATURE_OUTPUT_TYPE=$TEMPERATURE_OUTPUT_TYPE
+OUTPUT_DISPLAY_INDEX=$OUTPUT_DISPLAY_INDEX
+
+NETWORK_USAGE_CURRENT_OUTPUT_TYPE=$NETWORK_USAGE_CURRENT_OUTPUT_TYPE
+
+BLANK_SCREEN_AT_SPECIFIC_TIME_ENABLED=$BLANK_SCREEN_AT_SPECIFIC_TIME_ENABLED
+BLANK_SCREEN_TIME_HOUR_START=$BLANK_SCREEN_TIME_HOUR_START
+BLANK_SCREEN_TIME_HOUR_END=$BLANK_SCREEN_TIME_HOUR_END
+
+_EOF_
+		# Add enabled scenes
+		for ((i=0; i<$MAX_SCENES; i++))
+		do
+			echo "aEnabledScenes[$i]=${aEnabledScenes[$i]}" >> "$FP_SETTINGS"
+		done
+
+		# Add Drive Paths and Names
+		for ((i=0; i<$MAX_STORAGE; i++))
+		do
+			echo "STORAGE_PATH[$i]='${STORAGE_PATH[$i]}'" >> "$FP_SETTINGS"
+			echo "STORAGE_NAME[$i]='${STORAGE_NAME[$i]}'" >> "$FP_SETTINGS"
+		done
+
+	}
+
+	#/////////////////////////////////////////////////////////////////////////////////////
+	# Init
+	#/////////////////////////////////////////////////////////////////////////////////////
+	Init(){
+
+		#--------------------------------------------------------------------------------
+		# Override (slow) external "clear" command with function that prints the pure control sequence, clearing the screen MUCH faster!
+		eval "clear(){ printf '$(clear)'; }"
+
+		#--------------------------------------------------------------------------------
+		# Storage array
+		Init_STORAGE
+
+		#--------------------------------------------------------------------------------
+		# Load Settings file.
+		Read_Settings_File
+
+		#--------------------------------------------------------------------------------
+		# Check and disable scenes if software is not installed:
+		# - 8 Pi-hole
+		command -v pihole-FTL > /dev/null || aEnabledScenes[8]=0
+		# - 9 Tor Relay
+		command -v tor > /dev/null && command -v nyx > /dev/null || aEnabledScenes[9]=0
+
+		#--------------------------------------------------------------------------------
+		# Ensure we have at least 1 scene (dietpi) enabled in the settings file.
+		[[ ${aEnabledScenes[*]} == *1* ]] || aEnabledScenes[4]=1 SCENE_CURRENT=4
+
+	}
+
+	#/////////////////////////////////////////////////////////////////////////////////////
+	# Start/Stop Control for Menu
+	#/////////////////////////////////////////////////////////////////////////////////////
+	# 0=tty1 1=current
+	TTY=$(readlink -f /proc/$$/fd/1)
+	OUTPUT_DISPLAY_INDEX=0
+
+	Menu_Stop()
+	{
+		# Service if started.
+		systemctl stop dietpi-cloudshell
+
+		# Kill all, excluding Menu.
+		while read -r line
+		do
+			kill "$line"
+
+		done < <(pgrep -f 'dietpi-cloudshell [1-9]')
+	}
+
+	Menu_Start()
+	{
+		# Are we starting from current screen?
+		local output_current_screen=0
+		if (( $OUTPUT_DISPLAY_INDEX == 1 ))
+		then
+			output_current_screen=1
+
+		elif [[ $TTY == '/dev/tty1' ]]
+		then
+			output_current_screen=1
+		fi
+
+		# If so, launch in blocking mode
+		if (( $output_current_screen == 1 ))
+		then
+			clear
+			echo -e "$C_RESET"
+			read -rp "Use CTRL+C to exit. Press any key to launch $G_PROGRAM_NAME..."
+
+			Run_Cloudshell
+
+		# Else, launch via service on /dev/tty1
+		else
+			systemctl start dietpi-cloudshell
+		fi
+	}
+
+	Run_Cloudshell(){
+
+		Init_Term_Options
+
+		# Reset terminal and kill nyx on exit
+		G_EXIT_CUSTOM()
+		{
+			if [[ $NYX_PID ]]
+			then
+				kill -9 "$NYX_PID"
+				[[ $NYX_ACTIVE ]] && chvt "${TTY#/dev/tty}"
+				deallocvt 9
+			fi
+			clear
+			[[ -f $G_WORKING_DIR/previous_font ]] && setfont "$G_WORKING_DIR/previous_font"
+			setterm --reset
+		}
+
+		# Start Intro
+		(( $RUN_INTRO )) && Run_Intro
+
+		# Tor Relay
+		if [[ ${aEnabledScenes[9]} == 1 ]]
+		then
+			if [[ $TTY == '/dev/tty'[1-9]* ]]
+			then
+				# Pre-create nyx configuration
+				G_EXEC mkdir -p ~/.nyx
+				[[ -f ~/'.nyx/config' ]] || cat << '_EOF_' > ~/.nyx/config
+data_directory disabled
+redraw_rate 2
+show_bits true
+show_accounting false
+show_log false
+show_torrc false
+show_interpreter false
+_EOF_
+			else
+				G_DIETPI-NOTIFY 2 'Tor Relay scene cannot run on pseudo (SSH) or serial terminals, disabling it...'
+				aEnabledScenes[9]=0
+				G_SLEEP 1
+			fi
+			nyx &> /dev/tty9 &
+			NYX_PID=$!
+		fi
+
+		# Set Nice to +10 (not critical)
+		renice 10 $$
+
+		# Start display updates
+		while :
+		do
+
+			(( $BLANK_SCREEN_AT_SPECIFIC_TIME_ENABLED )) && RUN_BLANK_SCREEN_AT_SPECIFIC_TIME
+
+			# Disable updates when screen is blanked
+			if (( $BLANK_SCREEN_ACTIVE )); then
+
+				# Tor Relay: Switch away from nyx TTY
+				[[ $NYX_ACTIVE ]] && { chvt "${TTY#/dev/tty}"; NYX_ACTIVE=; }
+
+				G_SLEEP 60
+
+			# Update enabled scenes
+			else
+
+				if (( ${aEnabledScenes[$SCENE_CURRENT]} )); then
+
+					# Tor Relay: Switch away from nyx TTY, if not the current scene
+					[[ $NYX_ACTIVE && $SCENE_CURRENT != 9 ]] && { chvt "${TTY#/dev/tty}"; NYX_ACTIVE=; }
+
+					Update_Banner
+
+					# Input mode scene update (storage array)
+					if (( $SCENE_CURRENT == 1 )); then
+
+						Update_Scene_1 0 1
+
+					# Input mode scene update (storage array)
+					elif (( $SCENE_CURRENT == 2 )); then
+
+						Update_Scene_1 2 3
+
+					# Input mode scene update (storage array)
+					elif (( $SCENE_CURRENT == 3 )); then
+
+						Update_Scene_1 4 5
+
+					# Normal scene update
+					else
+
+						"Update_Scene_$SCENE_CURRENT"
+
+					fi
+
+					# Apply refresh rate delay
+					G_SLEEP "$REFRESH_RATE"
+
+				fi
+
+				# Scene switcher
+				((SCENE_CURRENT++))
+
+				# Cap
+				(( $SCENE_CURRENT >= $MAX_SCENES )) && SCENE_CURRENT=0
+
+			fi
+
+		done
+
+	}
+
+	#/////////////////////////////////////////////////////////////////////////////////////
+	# Menu System
+	#/////////////////////////////////////////////////////////////////////////////////////
+	TARGETMENUID=0
+	LASTSELECTED_ITEM=
+
+	Menu_Exit(){
+
+		G_WHIP_SIZE_X_MAX=50
+		if G_WHIP_YESNO "Exit $G_PROGRAM_NAME?"; then
+
+			# Save changes
+			Write_Settings_File
+
+			# Exit
+			TARGETMENUID=-1
+
+		else
+
+			# Return to Main Menu
+			TARGETMENUID=0
+
+		fi
+
+	}
+
+	# TARGETMENUID=0
+	Menu_Main(){
+
+		TARGETMENUID=0
+
+		local temp_output_text='Fahrenheit'
+		(( $TEMPERATURE_OUTPUT_TYPE == 1 )) && temp_output_text='Celsius'
+
+		local target_output_text='Main screen: tty1'
+		(( $OUTPUT_DISPLAY_INDEX == 1 )) && target_output_text="Current screen: $TTY"
+
+		local bitbyte_output_text='Bit (Kbit, Mbit, Gbit)'
+		(( $NETWORK_USAGE_CURRENT_OUTPUT_TYPE == 1 )) && bitbyte_output_text='Byte (KiB, MiB, GiB)'
+
+		local autoscreenoff='Disabled'
+		(( $BLANK_SCREEN_AT_SPECIFIC_TIME_ENABLED )) && autoscreenoff="Enabled | Start: $BLANK_SCREEN_TIME_HOUR_START h | End: $BLANK_SCREEN_TIME_HOUR_END h"
+
+		G_WHIP_MENU_ARRAY=(
+
+			'Colour' ': Setting: Change the colour scheme.'
+			'Update Rate' ': Setting: Control the time between screen updates.'
+			'Scenes' ': Setting: Toggle which scenes are shown.'
+			'Storage' ': Setting: Set mount locations used for storage stats.'
+			'Temperature' ": Setting: Output = [$temp_output_text]"
+			'Net Usage Current' ": Setting: Output = [$bitbyte_output_text]"
+			'Output Display' ": Setting: [$target_output_text]"
+			'Auto screen off' ": Setting: [$autoscreenoff]"
+			'Start / Restart' ": Apply settings. Launch on $target_output_text."
+			'Stop' ": Stops $G_PROGRAM_NAME."
+
+		)
+
+		G_WHIP_DEFAULT_ITEM=$LASTSELECTED_ITEM
+		G_WHIP_BUTTON_CANCEL_TEXT='Exit'
+		if G_WHIP_MENU; then
+
+			LASTSELECTED_ITEM=$G_WHIP_RETURNED_VALUE
+
+			case "$G_WHIP_RETURNED_VALUE" in
+
+				'Storage') TARGETMENUID=5;;
+
+				'Auto screen off') TARGETMENUID=4;;
+
+				'Net Usage Current')
+
+					(( $NETWORK_USAGE_CURRENT_OUTPUT_TYPE )) && NETWORK_USAGE_CURRENT_OUTPUT_TYPE=0 || NETWORK_USAGE_CURRENT_OUTPUT_TYPE=1
+
+				;;
+
+				'Temperature')
+
+					(( $TEMPERATURE_OUTPUT_TYPE )) && TEMPERATURE_OUTPUT_TYPE=0 || TEMPERATURE_OUTPUT_TYPE=1
+
+				;;
+
+				'Output Display')
+
+					(( $OUTPUT_DISPLAY_INDEX )) && OUTPUT_DISPLAY_INDEX=0 || OUTPUT_DISPLAY_INDEX=1
+
+				;;
+
+				'Start / Restart')
+
+					Write_Settings_File
+					Menu_Stop
+					Menu_Start
+
+				;;
+
+				'Stop') Menu_Stop;;
+
+				'Colour') TARGETMENUID=1;;
+
+				'Update Rate') TARGETMENUID=2;;
+
+				'Scenes') TARGETMENUID=3;;
+
+				*) G_DIETPI-NOTIFY 1 'An invalid "case" option was used. This is a bug, please report at: https://github.com/MichaIng/DietPi/issues'; exit 1;;
+
+			esac
+
+		else
+
+			Menu_Exit
+
+		fi
+
+	}
+
+	# TARGETMENUID=1
+	Menu_Colour(){
+
+		TARGETMENUID=0 # Return to main menu
+
+		G_WHIP_MENU_ARRAY=(
+
+			'0' ': White'
+			'1' ': Red'
+			'2' ': Green'
+			'3' ': Yellow (Default)'
+			'4' ': Blue'
+			'5' ': Purple'
+			'6' ': Cyan'
+
+		)
+
+		G_WHIP_DEFAULT_ITEM=$USER_COLOUR_INDEX
+		G_WHIP_MENU 'Please select a colour scheme.' && USER_COLOUR_INDEX=$G_WHIP_RETURNED_VALUE
+
+	}
+
+	# TARGETMENUID=2
+	Menu_UpdateRate(){
+
+		TARGETMENUID=0 # Return to main menu
+
+		G_WHIP_MENU_ARRAY=(
+
+			'1' 'Second'
+			'3' 'Seconds'
+			'5' 'Seconds (Default)'
+			'10' 'Seconds'
+			'15' 'Seconds'
+			'20' 'Seconds'
+			'30' 'Seconds'
+			'45' 'Seconds'
+			'60' 'Seconds'
+
+		)
+
+		G_WHIP_DEFAULT_ITEM=$REFRESH_RATE
+		G_WHIP_MENU 'Please select the desired delay, between scene changes and updates.' && REFRESH_RATE=$G_WHIP_RETURNED_VALUE
+
+	}
+
+	# TARGETMENUID=3
+	Menu_SceneSelection(){
+
+		TARGETMENUID=0 # Return to main menu
+
+		# Get on/off whilptail status
+		local aWhip_OnOff_Status=()
+		for ((i=0; i<$MAX_SCENES; i++))
+		do
+			# On/Off status
+			aWhip_OnOff_Status[$i]='on'
+			(( ${aEnabledScenes[$i]} )) || aWhip_OnOff_Status[$i]='off'
+		done
+
+		# Define options
+		G_WHIP_CHECKLIST_ARRAY=(
+
+			0 'CPU: Temperatures, Usage, frequency and more.' "${aWhip_OnOff_Status[0]}"
+			1 'Storage: Usage information for Flash and USB drives' "${aWhip_OnOff_Status[1]}"
+			2 ' - Additional Storage (USB_2/3)' "${aWhip_OnOff_Status[2]}"
+			3 ' - Additional Storage (USB_4/5)' "${aWhip_OnOff_Status[3]}"
+			4 'DietPi: Information, stats and updates for DietPi.' "${aWhip_OnOff_Status[4]}"
+			5 'Network Details: IP address, Speeds, Signal and more.' "${aWhip_OnOff_Status[5]}"
+			6 'Network Usage: Bandwidth usage (sent / recieved).' "${aWhip_OnOff_Status[6]}"
+			7 'Memory: Stats for RAM and Swapfile usage.' "${aWhip_OnOff_Status[7]}"
+			8 'Pi-hole: Stats for Pi-hole. Total Ads blocked etc.' "${aWhip_OnOff_Status[8]}"
+			9 'Tor Relay: Stats for a Tor relay. Bandwidth used etc.' "${aWhip_OnOff_Status[9]}"
+
+		)
+
+		G_WHIP_CHECKLIST 'Please use the spacebar to toggle which scenes are active.' || return
+
+		# Reset all scenes
+		for ((i=0; i<$MAX_SCENES; i++))
+		do
+			aEnabledScenes[$i]=0
+		done
+
+		# Enable selected scenes
+		for i in $G_WHIP_RETURNED_VALUE
+		do
+			aEnabledScenes[$i]=1
+
+			# If selected, assure that nyx Tor monitor is installed
+			[[ $i == 9 ]] && G_AG_CHECK_INSTALL_PREREQ nyx kbd
+		done
+
+	}
+
+	# TARGETMENUID=4
+	Menu_BlankScreenAtTime(){
+
+		TARGETMENUID=0 # Return to main menu
+
+		local blank_screen_at_specific_time_enabled_text='Disabled'
+		(( $BLANK_SCREEN_AT_SPECIFIC_TIME_ENABLED )) && blank_screen_at_specific_time_enabled_text='Enabled'
+
+		G_WHIP_MENU_ARRAY=(
+
+			'Toggle' ": [$blank_screen_at_specific_time_enabled_text]"
+			'Start time' ": [$BLANK_SCREEN_TIME_HOUR_START] Set which hour to power off screen."
+			'End time' ": [$BLANK_SCREEN_TIME_HOUR_END] Set which hour to power on screen."
+
+		)
+
+		G_WHIP_BUTTON_CANCEL_TEXT='Back'
+		if G_WHIP_MENU 'Automatically power down the screen and disable DietPi-CloudShell processing during a specific time.\n\nNB: This feature will only work if DietPi-CloudShell was launched with the DietPi-Autostart option, or, launched from the main screen (tty1).'; then
+
+			if [[ $G_WHIP_RETURNED_VALUE == 'Toggle' ]];then
+
+				((BLANK_SCREEN_AT_SPECIFIC_TIME_ENABLED++))
+				(( $BLANK_SCREEN_AT_SPECIFIC_TIME_ENABLED > 1 )) && BLANK_SCREEN_AT_SPECIFIC_TIME_ENABLED=0
+
+			elif [[ $G_WHIP_RETURNED_VALUE == 'Start time' ]];then
+
+				G_WHIP_MENU_ARRAY=()
+				for i in {0..23}
+				do
+					G_WHIP_MENU_ARRAY+=("$i" "Hour")
+				done
+
+				G_WHIP_DEFAULT_ITEM=$BLANK_SCREEN_TIME_HOUR_START
+				G_WHIP_MENU 'Please select which hour (24h) you would like the screen to power off.' && BLANK_SCREEN_TIME_HOUR_START=$G_WHIP_RETURNED_VALUE
+
+			elif [[ $G_WHIP_RETURNED_VALUE == 'End time' ]];then
+
+				G_WHIP_MENU_ARRAY=()
+				for i in {0..23}
+				do
+					G_WHIP_MENU_ARRAY+=("$i" 'Hour')
+				done
+
+				G_WHIP_DEFAULT_ITEM=$BLANK_SCREEN_TIME_HOUR_END
+				G_WHIP_MENU 'Please select which hour (24h) you would like the screen to power on.' && BLANK_SCREEN_TIME_HOUR_END=$G_WHIP_RETURNED_VALUE
+
+			fi
+
+			TARGETMENUID=4
+
+		fi
+
+	}
+
+	# TARGETMENUID=5
+	Menu_Storage(){
+
+		TARGETMENUID=0 # Return to main menu
+
+		G_WHIP_MENU_ARRAY=()
+		for ((i=1; i<$MAX_STORAGE; i++))
+		do
+			G_WHIP_MENU_ARRAY+=("$i" ": Drive $i | ${STORAGE_PATH[$i]}")
+		done
+
+		G_WHIP_BUTTON_CANCEL_TEXT='Back'
+		G_WHIP_MENU 'Storage Device Mount Location:\n\nDietPi-CloudShell pulls the storage stats from the drive mount location. If you have custom drives/mounts, please set them here to be displayed during storage scene updates.\n
+ - Drive 1 = Displayed during main storage scene
+ - Drive 2/3 = Displayed during additional storage scene
+ - Drive 4/5 = Displayed during additional storage scene' || return
+
+		local index=$G_WHIP_RETURNED_VALUE
+
+		/boot/dietpi/dietpi-drive_manager 1
+		local return_string=$(</tmp/dietpi-drive_manager_selmnt)
+		rm /tmp/dietpi-drive_manager_selmnt
+		[[ $return_string ]] && STORAGE_PATH[$index]=$return_string
+
+		TARGETMENUID=5
+
+	}
+
+	#/////////////////////////////////////////////////////////////////////////////////////
+	# MAIN
+	#/////////////////////////////////////////////////////////////////////////////////////
+	#-----------------------------------------------------------------------------------
+	# Init
+	Init
+	#-----------------------------------------------------------------------------------
+	# Run menu
+	if (( $INPUT == 0 ))
+	then
+		# Changing settings requires root
+		G_CHECK_ROOT_USER
+
+		# Start Menu
+		until (( $TARGETMENUID < 0 ))
+		do
+			clear
+
+			if (( $TARGETMENUID == 1 ))
+			then
+				Menu_Colour
+
+			elif (( $TARGETMENUID == 2 ))
+			then
+				Menu_UpdateRate
+
+			elif (( $TARGETMENUID == 3 ))
+			then
+				Menu_SceneSelection
+
+			elif (( $TARGETMENUID == 4 ))
+			then
+				Menu_BlankScreenAtTime
+
+			elif (( $TARGETMENUID == 5 ))
+			then
+				Menu_Storage
+			else
+				Menu_Main
+			fi
+		done
+
+	#-----------------------------------------------------------------------------------
+	# Run DietPi-CloudShell
+	elif (( $INPUT > 0 ))
+	then
+		Run_Cloudshell
+	fi
+	#-----------------------------------------------------------------------------------
+	exit
+	#-----------------------------------------------------------------------------------
+}

@@ -1,0 +1,13 @@
+# DietPi-Services Include/Exclude configuration
+
+# Include custom service (Use '+ servicename' without the comments to enable DietPi control of that service)
+#	Once completed, for DietPi to control the service, please run the following command, without quotes (')
+#	'dietpi-services dietpi_controlled'
+#+ myservice1
+#+ myservice2
+
+# Exclude DietPi from controlling known services (Use '- servicename' without the comments to disable DietPi control for that service)
+#	The service will be in disabled form, and, you can start and stop it manually
+#- cron
+#- transmission-daemon
+

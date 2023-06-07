@@ -1,0 +1,3 @@
+FP_TARGET=/mnt/dietpi-backup
+DAILY_BACKUP=0
+AMOUNT=1

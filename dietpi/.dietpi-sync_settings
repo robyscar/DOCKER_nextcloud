@@ -1,0 +1,4 @@
+FP_SOURCE='/mnt/source'
+FP_TARGET='/mnt/target'
+SYNC_DELETE_MODE=0
+SYNC_CRONDAILY=0

@@ -1,0 +1,719 @@
+#!/bin/bash
+{
+	#////////////////////////////////////
+	# DietPi JustBoom
+	#
+	#////////////////////////////////////
+	# Created by Daniel Knight / daniel.knight@dietpi.com / dietpi.com
+	#
+	#////////////////////////////////////
+	#
+	# Info:
+	# - Tweak your sound card, MPD and CAVA settings
+	# Usage:
+	# - /boot/dietpi/misc/dietpi-justboom
+	#////////////////////////////////////
+
+	# Import DietPi-Globals --------------------------------------------------------------
+	. /boot/dietpi/func/dietpi-globals
+	readonly G_PROGRAM_NAME='DietPi-JustBoom'
+	G_CHECK_ROOT_USER
+	G_CHECK_ROOTFS_RW
+	G_INIT
+	# Import DietPi-Globals --------------------------------------------------------------
+
+	# Prereq ALSA installed from dietpi-software
+	if [[ ! -f '/etc/asound.conf' ]] || ! dpkg-query -s alsa-utils &> /dev/null; then
+
+		G_WHIP_MSG "$G_PROGRAM_NAME requires ALSA to be installed and a sound card to be configured.\n
+Please select a sound card via 'dietpi-config' or install ALSA, or ideally an audio application, through 'dietpi-software' before use."
+		exit 1
+
+	fi
+
+	#/////////////////////////////////////////////////////////////////////////////////////
+	# Script Globals
+	#/////////////////////////////////////////////////////////////////////////////////////
+	SOUNDCARD_CURRENT='default'
+	SOUNDCARD_CARD_INDEX=0
+	EQ_ENABLED=0
+
+	# MPD
+	OUTPUT_FREQ='*'
+	OUTPUT_BITRATE='*'
+	OUTPUT_CHANNELS='*'
+	SOXR_ENABLED=0
+	SOXR_QUALITY='very high'
+	MPD_AUDIO_BUFFER_SIZE='*'
+	readonly FP_MPD_CONF='/etc/mpd.conf'
+	[[ -f $FP_MPD_CONF ]] && MPD_INSTALLED=1 || MPD_INSTALLED=0
+
+	# CAVA
+	CAVA_FRAMERATE=30
+	CAVA_COLOUR_FG='green'
+	CAVA_COLOUR_BG='black'
+	CAVA_BAR_GRAVITY='1.75'
+	CAVA_BAR_WIDTH=2
+	CAVA_MAINSCREENINUSE_DISPLAYED=0
+	readonly FP_CAVA_CONF='/root/.config/cava/config'
+	[[ -f $FP_CAVA_CONF ]] && CAVA_INSTALLED=1 || CAVA_INSTALLED=0
+
+	Reset_Globals(){
+
+		# ALSA EQ levels
+		[[ -f '/var/lib/dietpi/dietpi-config/.alsaequal.bin' ]] && G_EXEC rm /var/lib/dietpi/dietpi-config/.alsaequal.bin
+
+		# MPD
+		OUTPUT_FREQ='*'
+		OUTPUT_BITRATE='*'
+		OUTPUT_CHANNELS='*'
+		SOXR_ENABLED=0
+		SOXR_QUALITY='very high'
+		EQ_ENABLED=0
+		MPD_AUDIO_BUFFER_SIZE='*'
+
+		# CAVA
+		CAVA_FRAMERATE=30
+		CAVA_COLOUR_FG='green'
+		CAVA_COLOUR_BG='black'
+		CAVA_BAR_GRAVITY='1.75'
+		CAVA_BAR_WIDTH=2
+
+		# Save changes
+		Write_Apply_Globals
+
+	}
+
+	Read_Globals(){
+
+		SOUNDCARD_CURRENT=$(sed -n '/^[[:blank:]]*CONFIG_SOUNDCARD=/{s/^[^=]*=//p;q}' /boot/dietpi.txt)
+		# Remove equalizer and conversion plugin suffix
+		SOUNDCARD_CURRENT=${SOUNDCARD_CURRENT%-eq} SOUNDCARD_CURRENT=${SOUNDCARD_CURRENT%-plug}
+		[[ $SOUNDCARD_CURRENT ]] || SOUNDCARD_CURRENT='default'
+		SOUNDCARD_CARD_INDEX=$(mawk '/card /{print $2;exit}' /etc/asound.conf)
+		EQ_ENABLED=$(grep -cm1 '^[[:blank:]]*type equal[[:blank:]]*$' /etc/asound.conf)
+
+		# MPD specific
+		if (( $MPD_INSTALLED )); then
+
+			OUTPUT_FREQ=$(grep -m1 '^[[:blank:]]*format' "$FP_MPD_CONF" | sed 's/\"//g' | sed 's/:/ /g' | mawk '{print $2}')
+			[[ $OUTPUT_FREQ ]] || OUTPUT_FREQ='*'
+
+			OUTPUT_BITRATE=$(grep -m1 '^[[:blank:]]*format' "$FP_MPD_CONF" | sed 's/\"//g' | sed 's/:/ /g' | mawk '{print $3}')
+			[[ $OUTPUT_BITRATE ]] || OUTPUT_BITRATE='*'
+
+			OUTPUT_CHANNELS=$(grep -m1 '^[[:blank:]]*format' "$FP_MPD_CONF" | sed 's/\"//g' | sed 's/:/ /g' | mawk '{print $4}')
+			[[ $OUTPUT_CHANNELS ]] || OUTPUT_CHANNELS='*'
+
+			SOXR_ENABLED=$(grep -cm1 '^[[:blank:]]*samplerate_converter[[:blank:]][[:blank:]]*\"soxr' "$FP_MPD_CONF")
+			if [[ $SOXR_ENABLED ]]
+			then
+				SOXR_QUALITY=$(grep -Ecm1 '^[[:blank:]]*samplerate_converter[[:blank:]]+\"soxr' "$FP_MPD_CONF" | sed 's/\"//g' | mawk '{for(i=3;i<=NF;i++){printf "%s ", $i}; printf "\n"}' | sed 's/ *$//')
+				[[ $SOXR_QUALITY ]] || SOXR_QUALITY='very high'
+			fi
+
+			MPD_AUDIO_BUFFER_SIZE=$(grep -m1 '^[[:blank:]]*audio_buffer_size' "$FP_MPD_CONF" | mawk '{print $2}' | sed 's/\"//g')
+			[[ $MPD_AUDIO_BUFFER_SIZE ]] || MPD_AUDIO_BUFFER_SIZE='*'
+
+		fi
+
+		# CAVA specific
+		if (( $CAVA_INSTALLED )); then
+
+			CAVA_FRAMERATE=$(mawk '/framerate =/{print $NF;exit}' "$FP_CAVA_CONF")
+			CAVA_COLOUR_BG=$(mawk '/background =/{print $NF;exit}' "$FP_CAVA_CONF")
+			CAVA_COLOUR_FG=$(mawk '/foreground =/{print $NF;exit}' "$FP_CAVA_CONF")
+			CAVA_BAR_GRAVITY=$(mawk '/gravity =/{print $NF;exit}' "$FP_CAVA_CONF")
+			CAVA_BAR_WIDTH=$(mawk '/bar_width =/{print $NF;exit}' "$FP_CAVA_CONF")
+
+		fi
+
+	}
+
+	Write_Apply_Globals(){
+
+		if (( $EQ_ENABLED )); then
+
+			/boot/dietpi/func/dietpi-set_hardware soundcard "$SOUNDCARD_CURRENT-eq"
+
+		else
+
+			/boot/dietpi/func/dietpi-set_hardware soundcard "$SOUNDCARD_CURRENT"
+
+		fi
+
+		# MPD specific
+		if (( $MPD_INSTALLED )); then
+
+			# Output format: Apply only if any value is enforced
+			G_EXEC sed -Ei '/^[[:blank:]]*type[[:blank:]]+"alsa"/,/^[[:blank:]]*}$/{/^[[:blank:]#]*format[[:blank:]]/d}' "$FP_MPD_CONF"
+			[[ $OUTPUT_FREQ$OUTPUT_BITRATE$OUTPUT_CHANNELS == '***' ]] || G_EXEC sed -Ei "/^[[:blank:]]*type[[:blank:]]+\"alsa\"/a\	format \"$OUTPUT_FREQ:$OUTPUT_BITRATE:$OUTPUT_CHANNELS\"" "$FP_MPD_CONF"
+
+			if (( $SOXR_ENABLED )); then
+
+				G_CONFIG_INJECT 'samplerate_converter[[:blank:]]' "samplerate_converter \"soxr $SOXR_QUALITY\"" "$FP_MPD_CONF"
+				if [[ $OUTPUT_FREQ$OUTPUT_BITRATE$OUTPUT_CHANNELS == '***' ]]
+				then
+					G_EXEC sed -i '/audio_output_format[[:blank:]]/d' "$FP_MPD_CONF"
+				else
+					G_CONFIG_INJECT 'audio_output_format[[:blank:]]' "audio_output_format \"$OUTPUT_FREQ:$OUTPUT_BITRATE:$OUTPUT_CHANNELS\"" "$FP_MPD_CONF"
+				fi
+			else
+
+				G_EXEC sed -i '/samplerate_converter[[:blank:]]/d' "$FP_MPD_CONF"
+				G_EXEC sed -i '/audio_output_format[[:blank:]]/d' "$FP_MPD_CONF"
+
+			fi
+
+			# Buffer
+			if [[ $MPD_AUDIO_BUFFER_SIZE == '*' ]]
+			then
+				G_EXEC sed -i '/audio_buffer_size[[:blank:]]/d' "$FP_MPD_CONF"
+			else
+				G_CONFIG_INJECT 'audio_buffer_size[[:blank:]]' "audio_buffer_size \"$MPD_AUDIO_BUFFER_SIZE\"" "$FP_MPD_CONF"
+			fi
+
+			G_EXEC systemctl restart mpd
+
+		fi
+
+		# CAVA specific
+		if (( $CAVA_INSTALLED )); then
+
+			G_CONFIG_INJECT 'framerate =' "framerate = $CAVA_FRAMERATE" "$FP_CAVA_CONF"
+			G_CONFIG_INJECT 'background =' "background = $CAVA_COLOUR_BG" "$FP_CAVA_CONF"
+			G_CONFIG_INJECT 'foreground =' "foreground = $CAVA_COLOUR_FG" "$FP_CAVA_CONF"
+			G_CONFIG_INJECT 'gravity =' "gravity = $CAVA_BAR_GRAVITY" "$FP_CAVA_CONF"
+			G_CONFIG_INJECT 'bar_width =' "bar_width = $CAVA_BAR_WIDTH" "$FP_CAVA_CONF"
+
+		fi
+
+		Read_Globals
+
+	}
+
+	Cava_Start(){
+
+		killall -qw cava
+
+		# Running on current screen
+		if [[ $(tty) == '/dev/tty1' ]]; then
+
+			# Display this warning once only
+			(( $CAVA_MAINSCREENINUSE_DISPLAYED )) && return
+
+			G_WHIP_MSG "Error:\n\nMain screen in use. To launch CAVA on the main screen, please exit $G_PROGRAM_NAME and run the following command:\n - cava\n\nNB: Press CTRL+C to exit CAVA."
+			CAVA_MAINSCREENINUSE_DISPLAYED=1
+
+		else
+
+			setterm -blank 0 -powersave off <> /dev/fb2 >&0 2>&1 # Odroid 3.5 inch
+			cava <> /dev/console >&0 2>&1 &
+
+		fi
+
+	}
+
+	#/////////////////////////////////////////////////////////////////////////////////////
+	# Whip
+	#/////////////////////////////////////////////////////////////////////////////////////
+	TARGETMENUID=0
+	LAST_SELECTED_NAME=0
+
+	Menu_Exit(){
+
+		G_WHIP_SIZE_X_MAX=50
+		G_WHIP_YESNO "Exit $G_PROGRAM_NAME?" && TARGETMENUID=-1 # Exit
+
+	}
+
+	#TARGETMENUID=0
+	Menu_Main(){
+
+		local eq_enabled_text='Off'
+		(( $EQ_ENABLED )) && eq_enabled_text='On'
+
+		G_WHIP_MENU_ARRAY=('' '●─ Global Options ')
+		G_WHIP_MENU_ARRAY+=('ALSA Mixer' ': Launches ALSA Mixer, tweak sound card settings')
+		G_WHIP_MENU_ARRAY+=('ALSA Output Info' ': View info on current ALSA playback stream')
+		G_WHIP_MENU_ARRAY+=("EQ Enable" ": [$eq_enabled_text] | Select to toggle EQ")
+		(( $EQ_ENABLED )) && G_WHIP_MENU_ARRAY+=('EQ Configure' ': Launches AlsaMixer to configure EQ settings')
+		G_WHIP_MENU_ARRAY+=('Reset' ': Reset all options to defaults')
+
+		# Allo Piano 2.1 specials
+		if grep -qi 'piano-dac-plus' <<< "$SOUNDCARD_CURRENT"; then
+
+			G_WHIP_MENU_ARRAY+=('' '●─ Allo Piano 2.1 ')
+
+			local dsp_filter=$(amixer -c "$SOUNDCARD_CARD_INDEX" sget "'DSP Program'" | grep 'Item0:' | sed 's/.*Item0: //')
+			G_WHIP_MENU_ARRAY+=("DSP Filter" ": [$dsp_filter]")
+
+			local digital_volume_int=$(amixer -c "$SOUNDCARD_CARD_INDEX" sget "'Digital'" | grep 'Front Left:' | mawk '{print $4}')
+			local digital_volume_db=$(amixer -c "$SOUNDCARD_CARD_INDEX" sget "'Digital'" | grep 'Front Left:' | mawk '{print $6}' | tr -d '\[\]')
+			G_WHIP_MENU_ARRAY+=('Master Volume' ": [$digital_volume_int ($digital_volume_db)]")
+
+			local dualoutput_mode=$(amixer -c "$SOUNDCARD_CARD_INDEX" sget "'Dual Mode'" | grep 'Item0:' | sed 's/.*Item0: //')
+			G_WHIP_MENU_ARRAY+=('Dual Output Mode' ": [$dualoutput_mode]")
+
+			local subwoofer_mode=$(amixer -c "$SOUNDCARD_CARD_INDEX" sget "'Subwoofer mode'" | grep 'Item0:' | sed 's/.*Item0: //')
+			G_WHIP_MENU_ARRAY+=('Subwoofer Mode' ": [$subwoofer_mode]")
+
+			local subwoofer_volume_int=$(amixer -c "$SOUNDCARD_CARD_INDEX" sget "'Subwoofer'" | grep 'Front Left:' | mawk '{print $4}')
+			local subwoofer_volume_db=$(amixer -c "$SOUNDCARD_CARD_INDEX" sget "'Subwoofer'" | grep 'Front Left:' | mawk '{print $6}' | tr -d '\[\]')
+			G_WHIP_MENU_ARRAY+=('Subwoofer Volume' ": [$subwoofer_volume_int ($subwoofer_volume_db)]")
+
+			# - Only active with subwoofer 2.1+ modes
+			if [[ $subwoofer_mode != '2.0' ]]
+			then
+				local subwoofer_crossover_frequency=$(amixer -c "$SOUNDCARD_CARD_INDEX" sget "'Lowpass'" | grep 'Item0:' | sed 's/.*Item0: //')
+				G_WHIP_MENU_ARRAY+=('Subwoofer Crossover' ": [$subwoofer_crossover_frequency Hz]")
+			fi
+
+		fi
+
+		# MPD specific
+		if (( $MPD_INSTALLED )); then
+
+			G_WHIP_MENU_ARRAY+=('' '●─ MPD Specific ')
+
+			local output_freq_text='unchanged'
+			[[ $OUTPUT_FREQ == '*' ]] || output_freq_text="$OUTPUT_FREQ Hz"
+			G_WHIP_MENU_ARRAY+=('Output Frequency' ": [$output_freq_text] | Select to change")
+
+			local output_bitrate_text='unchanged'
+			[[ $OUTPUT_BITRATE == '*' ]] || output_bitrate_text="$OUTPUT_BITRATE Bit"
+			G_WHIP_MENU_ARRAY+=('Output BitRate' ": [$output_bitrate_text] | Select to change")
+
+			local output_channels_text='unchanged'
+			[[ $OUTPUT_CHANNELS == '*' ]] || output_channels_text="$OUTPUT_CHANNELS Channels"
+			G_WHIP_MENU_ARRAY+=('Output Channels' ": [$output_channels_text] | Select to change")
+
+			local autio_buffer_text='default'
+			[[ $MPD_AUDIO_BUFFER_SIZE == '*' ]] || autio_buffer_text="$MPD_AUDIO_BUFFER_SIZE KiB"
+			G_WHIP_MENU_ARRAY+=('Audio Buffer' ": [$autio_buffer_text] | Select to change")
+
+			local soxr_enabled_text='Off'
+			(( $SOXR_ENABLED )) && soxr_enabled_text='On'
+			G_WHIP_MENU_ARRAY+=('SOXR Enable' ": [$soxr_enabled_text] | Select to toggle SOXR resampling")
+			(( $SOXR_ENABLED )) && G_WHIP_MENU_ARRAY+=('SOXR Quality' ": [$SOXR_QUALITY] | Select SOXR quality level")
+
+		fi
+
+		# CAVA specific
+		if (( $CAVA_INSTALLED )); then
+
+			G_WHIP_MENU_ARRAY+=('' '●─ CAVA Specific ')
+			G_WHIP_MENU_ARRAY+=('CAVA Start/Restart' ': Launch CAVA on main screen')
+			pgrep 'cava' &> /dev/null && G_WHIP_MENU_ARRAY+=('CAVA Stop' ': Stop CAVA')
+			G_WHIP_MENU_ARRAY+=('CAVA Framerate' ": [$CAVA_FRAMERATE fps] | Select to change")
+			G_WHIP_MENU_ARRAY+=('CAVA FG Colour' ": [$CAVA_COLOUR_FG] | Select to change")
+			G_WHIP_MENU_ARRAY+=('CAVA BG Colour' ": [$CAVA_COLOUR_BG] | Select to change")
+			G_WHIP_MENU_ARRAY+=('CAVA Bar Width' ": [$CAVA_BAR_WIDTH] | Select to change")
+			G_WHIP_MENU_ARRAY+=('CAVA Bar Gravity' ": [$CAVA_BAR_GRAVITY] | Select to change")
+
+		fi
+
+		G_WHIP_DEFAULT_ITEM=$LAST_SELECTED_NAME
+		G_WHIP_BUTTON_CANCEL_TEXT='Exit'
+		if G_WHIP_MENU 'Tweak your High-End Audiophile JustBoom (and others) sound card:'; then
+
+			LAST_SELECTED_NAME=$G_WHIP_RETURNED_VALUE
+
+			if [[ $G_WHIP_RETURNED_VALUE == 'ALSA Output Info' ]]; then
+
+				G_DIETPI-NOTIFY 3 DietPi-JustBoom "ALSA Output Info"
+				local stream_result=$(cat /proc/asound/card*/pcm0p/sub0/hw_params)
+				echo -e "$stream_result\n"
+
+				[[ $stream_result == 'closed' ]] && G_DIETPI-NOTIFY 1 'Detailed info is only available when audio is being played, play some music first!'
+
+				G_DIETPI-NOTIFY 0 'Completed, press any key to exit...\n'
+				read -rp 'Press any key to exit...'
+
+			elif [[ $G_WHIP_RETURNED_VALUE == 'Subwoofer Mode' ]]; then
+
+				G_WHIP_MENU_ARRAY=(
+
+					'2.0' ': Disables Subwoofer output'
+					'2.1' ': Enables Subwoofer output (mono)'
+					'2.2' ': Enables Subwoofer output (stereo)'
+
+				)
+
+				G_WHIP_DEFAULT_ITEM=$subwoofer_mode
+				G_WHIP_MENU 'Please select a channel mode for Subwoofer output:' && amixer -c "$SOUNDCARD_CARD_INDEX" sset 'Subwoofer mode' "$G_WHIP_RETURNED_VALUE"
+
+			elif [[ $G_WHIP_RETURNED_VALUE == 'Dual Output Mode' ]]; then
+
+				G_WHIP_MENU_ARRAY=(
+
+					'Dual-Mono' ': Enables Dual output (mono)'
+					'Dual-Stereo' ': Enables Dual output (stereo)'
+
+				)
+
+				G_WHIP_DEFAULT_ITEM=$dualoutput_mode
+				G_WHIP_MENU 'Please select a channel mode for Subwoofer output:' && amixer -c "$SOUNDCARD_CARD_INDEX" sset 'Dual Mode' "$G_WHIP_RETURNED_VALUE"
+
+			elif [[ $G_WHIP_RETURNED_VALUE == 'Master Volume' ]]; then
+
+				G_WHIP_MENU_ARRAY=()
+
+				for ((i=206; i>=0; i--))
+				do
+					if (( $i == 0 )); then
+
+						G_WHIP_MENU_ARRAY+=("$i" 'Mute')
+
+					elif (( $i == 206 )); then
+
+						G_WHIP_MENU_ARRAY+=("$i" ': Max (-0.50dB)')
+
+					else
+
+						G_WHIP_MENU_ARRAY+=("$i" '')
+
+					fi
+				done
+
+				G_WHIP_DEFAULT_ITEM=$digital_volume_int
+				G_WHIP_MENU 'Please select a volume level for Master output:' && amixer -c "$SOUNDCARD_CARD_INDEX" sset 'Digital' "$G_WHIP_RETURNED_VALUE"
+
+			elif [[ $G_WHIP_RETURNED_VALUE == 'Subwoofer Volume' ]]; then
+
+				G_WHIP_MENU_ARRAY=()
+
+				for ((i=206; i>=0; i--))
+				do
+					if (( $i == 0 )); then
+
+						G_WHIP_MENU_ARRAY+=("$i" 'Mute')
+
+					elif (( $i == 206 )); then
+
+						G_WHIP_MENU_ARRAY+=("$i" ': Max (-0.50dB)')
+
+					else
+
+						G_WHIP_MENU_ARRAY+=("$i" '')
+
+					fi
+				done
+
+				G_WHIP_DEFAULT_ITEM=$subwoofer_volume_int
+				G_WHIP_MENU 'Please select a volume level for Subwoofer output:' && amixer -c "$SOUNDCARD_CARD_INDEX" sset 'Subwoofer' "$G_WHIP_RETURNED_VALUE"
+
+			elif [[ $G_WHIP_RETURNED_VALUE == 'Subwoofer Crossover' ]]; then
+
+				G_WHIP_MENU_ARRAY=(
+
+					'60' 'Hz'
+					'70' 'Hz'
+					'80' 'Hz'
+					'90' 'Hz (Default)'
+					'100' 'Hz'
+					'110' 'Hz'
+					'120' 'Hz'
+					'130' 'Hz'
+					'140' 'Hz'
+					'150' 'Hz'
+					'160' 'Hz'
+					'170' 'Hz'
+					'180' 'Hz'
+					'190' 'Hz'
+					'200' 'Hz'
+
+				)
+
+				G_WHIP_DEFAULT_ITEM=$subwoofer_crossover_frequency
+				G_WHIP_MENU 'Please select the lowpass crossover frequency for Subwoofer:\n
+Everything below the selected freq will be output through subwoofer out, when subwoofer mode 2.1/2.2 is selected.' && amixer -c "$SOUNDCARD_CARD_INDEX" sset 'Lowpass' "$G_WHIP_RETURNED_VALUE"
+
+			elif [[ $G_WHIP_RETURNED_VALUE == 'DSP Filter' ]]; then
+
+				G_WHIP_MENU_ARRAY=(
+
+					'FIR interpolation with de-emphasis' '(Default)'
+					'Low latency IIR with de-emphasis' ''
+					'High attenuation with de-emphasis' ''
+					'Fixed process flow' ''
+					'Ringing-less low latency FIR' ''
+
+				)
+
+				G_WHIP_DEFAULT_ITEM=$dsp_filter
+				G_WHIP_MENU 'Please select a DSP Filter:' && amixer -c "$SOUNDCARD_CARD_INDEX" sset 'DSP Program' "$G_WHIP_RETURNED_VALUE"
+
+			elif [[ $G_WHIP_RETURNED_VALUE == 'CAVA Start/Restart' ]]; then
+
+				Cava_Start
+
+			elif [[ $G_WHIP_RETURNED_VALUE == 'CAVA Stop' ]]; then
+
+				killall -w cava
+
+			elif [[ $G_WHIP_RETURNED_VALUE == 'CAVA Framerate' ]]; then
+
+				G_WHIP_MENU_ARRAY=(
+
+					'10' ': Lowest CPU usage'
+					'20' ''
+					'30' ': Default'
+					'40' ''
+					'50' ''
+					'60' ''
+					'80' ''
+					'100' ''
+					'120' ': Highest CPU usage'
+
+				)
+
+				G_WHIP_DEFAULT_ITEM=$CAVA_FRAMERATE
+				if G_WHIP_MENU 'Please select a framerate:'; then
+
+					CAVA_FRAMERATE=$G_WHIP_RETURNED_VALUE
+					Write_Apply_Globals
+
+				fi
+
+			elif [[ $G_WHIP_RETURNED_VALUE == 'CAVA Bar Width' ]]; then
+
+				G_WHIP_MENU_ARRAY=(
+
+					'1' ': Thin (Increases total bar count)'
+					'2' ': Default'
+					'3' ''
+					'4' ''
+					'5' ''
+					'6' ''
+					'8' ': Thick (Lowers total bar count)'
+
+				)
+
+				G_WHIP_DEFAULT_ITEM=$CAVA_BAR_WIDTH
+				if G_WHIP_MENU 'Please select a bar width:\n - The size of the bars affects how many are displayed'; then
+
+					CAVA_BAR_WIDTH=$G_WHIP_RETURNED_VALUE
+					Write_Apply_Globals
+
+				fi
+
+			elif [[ $G_WHIP_RETURNED_VALUE == 'CAVA FG Colour' || $G_WHIP_RETURNED_VALUE == 'CAVA BG Colour' ]] ; then
+
+				local apply_fg_colour=0
+				local default_item=$CAVA_COLOUR_BG
+				if [[ $G_WHIP_RETURNED_VALUE == 'CAVA FG Colour' ]]; then
+
+					apply_fg_colour=1
+					default_item=$CAVA_COLOUR_FG
+
+				fi
+
+				G_WHIP_MENU_ARRAY=(
+
+					'green' ''
+					'red' ''
+					'yellow' ''
+					'magenta' ''
+					'cyan' ''
+					'white' ''
+					'blue' ''
+					'black' ''
+
+				)
+
+				G_WHIP_DEFAULT_ITEM=$default_item
+				if G_WHIP_MENU 'Please select a colour:'; then
+
+					(( $apply_fg_colour )) && CAVA_COLOUR_FG=$G_WHIP_RETURNED_VALUE || CAVA_COLOUR_BG=$G_WHIP_RETURNED_VALUE
+					Write_Apply_Globals
+
+				fi
+
+			elif [[ $G_WHIP_RETURNED_VALUE == 'CAVA Bar Gravity' ]]; then
+
+				G_WHIP_MENU_ARRAY=(
+
+					'0.1' ': Slow drop off speed'
+					'0.25' ''
+					'0.5' ''
+					'0.75' ''
+					'1' ''
+					'1.25' ''
+					'1.5' ''
+					'1.75' ': Default'
+					'2' ': High drop off speed'
+
+				)
+
+				G_WHIP_DEFAULT_ITEM=$CAVA_BAR_GRAVITY
+				if G_WHIP_MENU 'Please select a gravity level (drop off speed) for the bars:\n - Higher values means bars will drop faster.'; then
+
+					CAVA_BAR_GRAVITY=$G_WHIP_RETURNED_VALUE
+					Write_Apply_Globals
+
+				fi
+
+			elif [[ $G_WHIP_RETURNED_VALUE == 'EQ Configure' ]]; then
+
+				if (( $EQ_ENABLED == 1 )); then
+
+					G_WHIP_MSG 'The ALSA EQ mixer will now be launched, when finished, press F10 or ESC to exit.'
+					alsamixer -D eq
+					G_EXEC chown dietpi:dietpi /var/lib/dietpi/dietpi-config/.alsaequal.bin
+					G_EXEC chmod 0664 /var/lib/dietpi/dietpi-config/.alsaequal.bin
+
+				fi
+
+			elif [[ $G_WHIP_RETURNED_VALUE == 'ALSA Mixer' ]]; then
+
+				G_WHIP_MSG 'ALSA Mixer will now be launched, when finished, press F10 or ESC to exit.'
+				alsamixer
+
+			elif [[ $G_WHIP_RETURNED_VALUE == 'EQ Enable' ]]; then
+
+				(( $EQ_ENABLED )) && EQ_ENABLED=0 || EQ_ENABLED=1
+				Write_Apply_Globals
+
+			elif [[ $G_WHIP_RETURNED_VALUE == 'SOXR Enable' ]]; then
+
+				(( $SOXR_ENABLED )) && SOXR_ENABLED=0 || SOXR_ENABLED=1
+				Write_Apply_Globals
+
+			elif [[ $G_WHIP_RETURNED_VALUE == 'SOXR Quality' ]]; then
+
+				G_WHIP_MENU_ARRAY=(
+
+					'very high' ': Highest quality, highest CPU usage'
+					'high' ': Default quality, medium CPU usage'
+					'low' ': Lowest quality, minimal CPU usage'
+
+				)
+
+				G_WHIP_DEFAULT_ITEM=$SOXR_QUALITY
+				if G_WHIP_MENU 'Please select a SOXR quality level:'; then
+
+					SOXR_QUALITY=$G_WHIP_RETURNED_VALUE
+					Write_Apply_Globals
+
+				fi
+
+			elif [[ $G_WHIP_RETURNED_VALUE == 'Audio Buffer' ]]; then
+
+				G_WHIP_MENU_ARRAY=(
+
+					'Default' ': Keep default (recommended)'
+					'128' ': Lowest latency (may cause buffer under/overruns)'
+					'192' ':'
+					'256' ':'
+					'384' ':'
+					'512' ':'
+					'1024' ':'
+					'2048' ':'
+					'4096' ': Highest latency'
+
+				)
+
+				G_WHIP_DEFAULT_ITEM=${MPD_AUDIO_BUFFER_SIZE/\*/Default}
+				if G_WHIP_MENU 'Please select an audio buffer size (KiB):'; then
+
+					MPD_AUDIO_BUFFER_SIZE=${G_WHIP_RETURNED_VALUE/Default/*}
+					Write_Apply_Globals
+
+				fi
+
+			elif [[ $G_WHIP_RETURNED_VALUE == 'Output Frequency' ]]; then
+
+				G_WHIP_MENU_ARRAY=(
+
+					'Unchanged' ': Do not enforce a frequency'
+					'384000' ': 384kHz (highest quality)'
+					'352800' ': 352kHz'
+					'192000' ': 192kHz'
+					'96000' ': 96kHz'
+					'88200' ': 88.2kHz'
+					'64000' ': 64kHz'
+					'48000' ': 48kHz (HDMI standard)'
+					'44100' ': 44.1kHz (music standard)'
+
+				)
+
+				G_WHIP_DEFAULT_ITEM=${OUTPUT_FREQ/\*/Unchanged}
+				if G_WHIP_MENU 'Please select an output frequency:'; then
+
+					OUTPUT_FREQ=${G_WHIP_RETURNED_VALUE/Unchanged/*}
+					Write_Apply_Globals
+
+				fi
+
+			elif [[ $G_WHIP_RETURNED_VALUE == 'Output BitRate' ]]; then
+
+				G_WHIP_MENU_ARRAY=(
+
+					'Unchanged' ': Do not enforce a bitrate'
+					'32' ': (highest quality, recommended)'
+					'24' ':'
+					'16' ': (CD audio quality)'
+
+				)
+
+				G_WHIP_DEFAULT_ITEM=${OUTPUT_BITRATE/\*/Unchanged}
+				if G_WHIP_MENU 'Please select an output bitrate:'; then
+
+					OUTPUT_BITRATE=${G_WHIP_RETURNED_VALUE/Unchanged/*}
+					Write_Apply_Globals
+
+				fi
+
+			elif [[ $G_WHIP_RETURNED_VALUE == 'Output Channels' ]]; then
+
+				G_WHIP_MENU_ARRAY=(
+
+					'Unchanged' ': Do not enforce a channel count'
+					'1' ':'
+					'2' ':'
+					'3' ':'
+					'4' ':'
+					'5' ':'
+					'6' ':'
+					'7' ':'
+					'8' ':'
+
+				)
+
+				G_WHIP_DEFAULT_ITEM=${OUTPUT_CHANNELS/\*/Unchanged}
+				if G_WHIP_MENU 'Please select a number of output channels:'; then
+
+					OUTPUT_CHANNELS=${G_WHIP_RETURNED_VALUE/Unchanged/*}
+					Write_Apply_Globals
+
+				fi
+
+			elif [[ $G_WHIP_RETURNED_VALUE == 'Reset' ]]; then
+
+				Reset_Globals
+
+			fi
+
+		else
+
+			Menu_Exit
+
+		fi
+
+	}
+
+	#/////////////////////////////////////////////////////////////////////////////////////
+	# Main Loop
+	#/////////////////////////////////////////////////////////////////////////////////////
+	#-----------------------------------------------------------------------------------
+	Read_Globals
+	#-----------------------------------------------------------------------------------
+	until (( $TARGETMENUID < 0 ))
+	do
+		Menu_Main
+	done
+	#-----------------------------------------------------------------------------------
+	exit
+	#-----------------------------------------------------------------------------------
+}

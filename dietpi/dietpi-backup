@@ -1,0 +1,684 @@
+#!/bin/bash
+{
+	#////////////////////////////////////
+	# DietPi Backup
+	#
+	#////////////////////////////////////
+	# Created by Daniel Knight / daniel.knight@dietpi.com / dietpi.com
+	#
+	#////////////////////////////////////
+	#
+	# Info:
+	# - Location: /boot/dietpi/dietpi-backup
+	# - Allows for a complete system back and restore of the linux filesystem (/)
+	#
+	# Usage:
+	# - dietpi-backup -1 = Restore
+	# - dietpi-backup    = Menu
+	# - dietpi-backup  1 = Backup
+	#
+	# $2 = optional directory location to use with backup/restore input:
+	# - dietpi-backup -1 /path/to/target = Restore
+	# - dietpi-backup  1 /path/to/target = Backup
+	#////////////////////////////////////
+
+	# Import DietPi-Globals --------------------------------------------------------------
+	. /boot/dietpi/func/dietpi-globals
+	readonly G_PROGRAM_NAME='DietPi-Backup'
+	G_CHECK_ROOT_USER
+	G_CHECK_ROOTFS_RW
+	G_INIT
+	# Import DietPi-Globals --------------------------------------------------------------
+
+	# Grab input
+	[[ $1 =~ ^-?1$ ]] && INPUT=$1 || INPUT=0
+
+	#/////////////////////////////////////////////////////////////////////////////////////
+	# Backup System
+	#/////////////////////////////////////////////////////////////////////////////////////
+	# Backup file paths
+	FP_SOURCE='/'
+	FP_TARGET='/mnt/dietpi-backup'
+
+	# Stats and transfer logs, stored to: $FP_TARGET/
+	readonly FP_LOG='dietpi-backup.log'
+	readonly FP_STATS='.dietpi-backup_stats'
+
+	# Include/exclude file
+	readonly FP_FILTER='.dietpi-backup_filter_inc_exc'
+	readonly FP_FILTER_CUSTOM='/boot/dietpi/.dietpi-backup_inc_exc'
+
+	# rsync options
+	# - Backup: Delete files in target which are not present in source, or excluded
+	readonly aRSYNC_RUN_OPTIONS_BACKUP=('-aH' '--info=name0' '--info=progress2' '--delete-excluded' "--exclude-from=$FP_FILTER")
+	# - Restore: Delete files in target which are not present in source, but after the transfer has finished, and leave excluded files untouched
+	readonly aRSYNC_RUN_OPTIONS_RESTORE=('-aH' '--info=name0' '--info=progress2' '--delete-after' "--exclude-from=$FP_FILTER")
+
+	# Date format for logs
+	Print_Date(){ date '+%Y-%m-%d_%T'; }
+
+	# rsync already running error: $1=Backup/Restore
+	Error_Rsync_Already_Running(){
+
+		G_DIETPI-NOTIFY 1 'Another rsync process is already running.'
+		echo -e "$(Print_Date)  $1 failed: rsync is already running." >> "$FP_TARGET/$FP_STATS"
+		G_WHIP_MSG "$1 Error:\n\nA $1 could not be started as rsync is already running."
+		/boot/dietpi/dietpi-services start
+
+	}
+
+	Check_Supported_Directory_Location(){
+
+		# Obtain filesystem type. Create directory temporarily for this if missing.
+		if [[ ! -d $FP_TARGET ]]
+		then
+			G_EXEC mkdir -p "$FP_TARGET"
+			local fs_type=$(df -T "$FP_TARGET" | mawk 'NR==2 {print $2}')
+			G_EXEC rmdir "$FP_TARGET"
+		else
+			local fs_type=$(df -T "$FP_TARGET" | mawk 'NR==2 {print $2}')
+		fi
+
+		# Check for supported filesystem type
+		if [[ $fs_type =~ ^(ext[2-4]|(f2|btr|x|z)fs)$ ]]
+		then
+			return 0
+
+		elif [[ $fs_type =~ ^nfs4?$ ]]
+		then
+			G_CHECK_FS_PERMISSION_SUPPORT "$FP_TARGET" && { NFS=1; return 0; }
+			G_DIETPI-NOTIFY 1 "NFS mount $FP_TARGET does not support UNIX permissions"
+			G_WHIP_MSG "Unsupported NFS share:\n\n$FP_TARGET is an NFS share which does not support UNIX permissions.\n\nMake sure that the NFS share at the server is located on a filesystem with native symlink and UNIX permissions support."
+		else
+			G_DIETPI-NOTIFY 1 "Filesystem type $fs_type not supported in $FP_TARGET"
+			G_WHIP_MSG "Filesystem type not supported:\n\n$FP_TARGET has a filesystem type of $fs_type, which is not supported.\n\nThe filesystem type must be ext2/3/4, F2FS, Btrfs, XFS, ZFS or a proper NFS mount with native symlink and UNIX permissions support."
+		fi
+
+		return 1
+
+	}
+
+	Create_Filter_Include_Exclude(){
+
+		cat << _EOF_ > "$FP_FILTER"
+# Backup data, log and config
+- $FP_TARGET/
+- $FP_SETTINGS
+# RAM dirs
+- /dev/
+- /proc/
+- /run/
+- /sys/
+- /tmp/
+# Swap files
+- /var/swap
+- .swap*
+# Fake RTC timestamp
+- /etc/fake-hwclock.data
+# Unlinked inodes
+- /lost+found/
+# APT cache
+- /var/cache/apt/*
+_EOF_
+		# Add users filter list
+		[[ -f $FP_FILTER_CUSTOM ]] && cat "$FP_FILTER_CUSTOM" >> "$FP_FILTER"
+
+	}
+
+	Run_Backup(){
+
+		G_DIETPI-NOTIFY 3 "$G_PROGRAM_NAME" 'Backup'
+
+		# Check valid FS
+		NFS=0
+		Check_Supported_Directory_Location || return 1
+
+		# Rotate backups with more than 1 shall be kept
+		if (( $AMOUNT > 1 ))
+		then
+			G_DIETPI-NOTIFY 2 'Rotating backup archive'
+			if [[ -d $FP_TARGET/data_$AMOUNT ]]
+			then
+				[[ -d $FP_TARGET/data_tmp ]] && G_EXEC rm -R "$FP_TARGET/data_tmp" # Failsafe
+				G_EXEC mv "$FP_TARGET/data_$AMOUNT" "$FP_TARGET/data_tmp"
+			fi
+			if [[ -d $FP_TARGET/data ]]
+			then
+				for ((i=$AMOUNT-1;i>1;i--))
+				do
+					[[ -d $FP_TARGET/data_$i ]] && G_EXEC mv "$FP_TARGET/data_$i" "$FP_TARGET/data_$((i+1))"
+				done
+				G_EXEC mv "$FP_TARGET/data" "$FP_TARGET/data_2"
+			fi
+			[[ -d $FP_TARGET/data_tmp ]] && G_EXEC mv "$FP_TARGET/data_tmp" "$FP_TARGET/data"
+		fi
+
+		# Remove backups above selected amount
+		local number
+		for i in "$FP_TARGET/data_"*
+		do
+			number=${i#"$FP_TARGET/data_"}
+			disable_error=1 G_CHECK_VALIDINT "$number" $(($AMOUNT+1)) || continue
+			G_EXEC_DESC="Removing backup number $number which is above the selected amount $AMOUNT" G_EXEC rm -R "$i"
+		done
+
+		# Generate target directory if missing
+		[[ -d $FP_TARGET/data ]] || G_EXEC mkdir -p "$FP_TARGET/data"
+
+		/boot/dietpi/dietpi-services stop
+
+		# Check if rsync is already running, while the daemon should have been stopped above
+		pgrep 'rsync' &> /dev/null && { Error_Rsync_Already_Running 'Backup'; return 1; }
+
+		# Install required rsync if missing
+		G_AG_CHECK_INSTALL_PREREQ rsync
+
+		# Generate Exclude/Include lists
+		Create_Filter_Include_Exclude
+
+		# Free space check
+		if (( $SPACE_CHECK ))
+		then
+			G_DIETPI-NOTIFY 2 'Checking for sufficient disk space via rsync dry-run, please wait...'
+			local old_backup_size=$(du -sB1 "$FP_TARGET/data" | mawk '{print $1}') # Actual disk usage in bytes
+			# - Dry run to obtain transferred data size
+			rsync --dry-run --stats "${aRSYNC_RUN_OPTIONS_BACKUP[@]}" "$FP_SOURCE" "$FP_TARGET/data/" > .dietpi-backup_result
+			local new_backup_size=$(grep -m1 '^Total file size:' .dietpi-backup_result | sed 's/[^0-9]*//g') # Apparent data size without block size related overhead
+			local total_file_count=$(mawk '/^Number of files:/{print $6;exit}' .dietpi-backup_result | sed 's/[^0-9]*//g')
+			local total_folder_count=$(mawk '/^Number of files:/{print $8;exit}' .dietpi-backup_result | sed 's/[^0-9]*//g')
+			rm .dietpi-backup_result
+			local target_fs_blocksize=4096 # In case of NFS, apply fixed 4096 bytes block size, as "stat -fc '%s'" reports a very large network/protocol transfer-related size.
+			(( $NFS )) || target_fs_blocksize=$(stat -fc '%s' "$FP_TARGET/data")
+			new_backup_size=$(( $new_backup_size + ( $total_file_count + $total_folder_count ) * $target_fs_blocksize )) # Add one block size for each file + dir as worst case result
+			local end_result=$(( ( $new_backup_size - $old_backup_size ) / 1024**2 + 1 )) # bytes => MiB rounded up
+			# - Perform check
+			if ! G_CHECK_FREESPACE "$FP_TARGET/data" "$end_result"
+			then
+				G_WHIP_BUTTON_OK_TEXT='Ignore'
+				G_WHIP_BUTTON_CANCEL_TEXT='Exit'
+				if ! G_WHIP_YESNO 'The backup target location appears to have insufficient free space to successfully finish the backup.
+However, this check is a rough estimation in reasonable time, thus it could be marginally incorrect.
+\nWould you like to override this warning and continue with the backup?'
+				then
+					echo -e "$(Print_Date)  Backup cancelled: Insufficient free space" >> "$FP_TARGET/$FP_STATS"
+					/boot/dietpi/dietpi-services start
+					return 1
+				fi
+			fi
+		fi
+
+		G_DIETPI-NOTIFY 2 "Backup to $FP_TARGET in progress, please wait..."
+
+		# Init log file
+		echo -e "Backup log from $(Print_Date)\n" > "$FP_TARGET/$FP_LOG"
+		echo -e "$(Print_Date)  Backup starting" >> "$FP_TARGET/$FP_STATS"
+
+		rsync "${aRSYNC_RUN_OPTIONS_BACKUP[@]}" -v --log-file="$FP_TARGET/$FP_LOG" "$FP_SOURCE" "$FP_TARGET/data/"
+		EXIT_CODE=$?
+
+		# touch target directory to show the correct last update timestamp when restoring one of multiple backups from the archive. This needs to be done after the backup since it applies the root / timestamps.
+		G_EXEC touch "$FP_TARGET/data"
+
+		/boot/dietpi/dietpi-services start
+
+		G_DIETPI-NOTIFY -1 "$EXIT_CODE" "$G_PROGRAM_NAME: Backup"
+		if (( $EXIT_CODE == 0 )); then
+
+			echo -e "$(Print_Date)  Backup completed" >> "$FP_TARGET/$FP_STATS"
+			G_WHIP_MSG "Backup completed:\n - $FP_TARGET"
+
+		else
+
+			G_WHIP_MSG "Backup failed:\n - $FP_TARGET\n\nYou will see the log file on the next screen. Please check it for information and/or errors."
+
+		fi
+
+		log=1 G_WHIP_VIEWFILE "$FP_TARGET/$FP_LOG"
+
+	}
+
+	# When restoring a backup, assure that either the UUIDs stored in the backup fstab/boot config matches the current system drive, or that we know all relevant files to adjust afterwards.
+	Check_UUIDs()
+	{
+		UPDATE_UUIDs=0 UPDATE_GRUB=0 UPDATE_RPI=0 UPDATE_DIETPI=0 UPDATE_ARMBIAN=0 UPDATE_ODROID=0 UPDATE_UBOOT=0
+		UUID_ROOT=$(findmnt -Ufnro UUID -M /)
+		PARTUUID_ROOT=$(findmnt -Ufnro PARTUUID -M /)
+
+		# If the current rootfs' UUID or PARTUUID can be found in the the backups fstab, it can be assumed that it was created from the same drives.
+		grep -q "^UUID=${UUID_ROOT}[[:blank:]]" "$FP_TARGET/$DATA/etc/fstab" || grep -q "^PARTUUID=${PARTUUID_ROOT}[[:blank:]]" "$FP_TARGET/$DATA/etc/fstab" && return 0
+
+		UPDATE_UUIDs=1
+
+		# Else check if we know how to adjust the boot config after the backup has been restored.
+		# - x86_64
+		if (( $G_HW_ARCH == 10 )) && command -v update-grub > /dev/null
+		then
+			UPDATE_GRUB=1
+
+		# - RPi
+		elif [[ $G_HW_MODEL -le 9 && -f $FP_TARGET/$DATA/boot/cmdline.txt ]]
+		then
+			UPDATE_RPI=1
+
+		# - DietPi modern U-Boot
+		elif [[ -f $FP_TARGET/$DATA/boot/dietpiEnv.txt ]]
+		then
+			UPDATE_DIETPI=1
+
+		# - Armbian
+		elif [[ -f $FP_TARGET/$DATA/boot/armbianEnv.txt ]]
+		then
+			UPDATE_ARMBIAN=1
+
+		# - Odroids / classic U-Boot
+		elif [[ -f $FP_TARGET/$DATA/boot/boot.ini ]]
+		then
+			UPDATE_ODROID=1
+
+		# - Modern U-Boot
+		elif [[ -f $FP_TARGET/$DATA/boot/boot.cmd ]] && command -v mkimage > /dev/null
+		then
+			UPDATE_UBOOT=1
+
+		# - Else we cannot assure that the restored image will boot.
+		else
+			# Let user decide, but default to "no"
+			G_WHIP_YESNO '[WARNING] UUIDs of the backup and the current system differ
+\nThe file systems unique identifiers, usually used to mount the drives at boot, seem to differ between the backup and the current system.
+\nThis usually indicates that you try to restore an old backup onto a newly flashed DietPi system.
+\nMoreover are we not able to find the boot configuration, where those UUIDs would need to be adjusted, to assure that the system will boot.
+\nWe hence do not recommend to restore this backup on this system. If you continue, you will need to assure yourself that fstab and boot configurations match the UUIDs, else the system may not boot.
+\nDo you want to restore this backup?' && return 0 || return 1
+		fi
+
+		G_WHIP_DEFAULT_ITEM='ok' G_WHIP_YESNO '[WARNING] UUIDs of the backup and the current system differ
+\nThe file systems unique identifiers, usually used to mount the drives at boot, seem to differ between the backup and the current system.
+\nThis usually indicates that you try to restore an old backup onto a newly flashed DietPi system.
+\nBut we were able to find the boot configuration, where those UUIDs would need to be adjusted, to assure that the system will boot.
+\nIt should be hence safe to restore this backup, but if the UUIDs were used elsewhere, you might need to adjust it manually.
+\nDo you want to restore this backup?' && return 0 || return 1
+	}
+
+	Update_UUIDs()
+	{
+		# fstab
+		while read -r mountpoint
+		do
+			[[ $mountpoint ]] || continue
+			local uuid=$(findmnt -Ufnro UUID -M "$mountpoint")
+			[[ $uuid ]] && G_EXEC sed -i "\|[[:blank:]]${mountpoint}[[:blank:]]|s|^[[:blank:]]*UUID=[^[:blank:]]*|UUID=$uuid|" /etc/fstab
+			local partuuid=$(findmnt -Ufnro PARTUUID -M "$mountpoint")
+			[[ $partuuid ]] && G_EXEC sed -i "\|[[:blank:]]${mountpoint}[[:blank:]]|s|^[[:blank:]]*PARTUUID=[^[:blank:]]*|PARTUUID=$partuuid|" /etc/fstab
+
+		done < <(lsblk -no MOUNTPOINT "$(lsblk -npo PKNAME "$G_ROOTFS_DEV")")
+
+		# boot configs
+		# - x86_64
+		if (( $UPDATE_GRUB == 1 ))
+		then
+			G_EXEC update-grub
+			command -v update-tirfs > /dev/null && G_EXEC update-tirfs && return
+			command -v dracut > /dev/null && G_EXEC dracut --force && return
+			command -v update-initramfs > /dev/null && G_EXEC update-initramfs -u
+
+		# - RPi
+		elif (( $UPDATE_RPI == 1 ))
+		then
+			G_EXEC sed -Ei "s/(^|[[:blank:]])root=[^[:blank:]]*/\1root=PARTUUID=$PARTUUID_ROOT/" /boot/cmdline.txt
+
+		# - DietPi modern U-Boot
+		elif (( $UPDATE_DIETPI == 1 ))
+		then
+			grep -q '^[[:blank:]]*rootdev=UUID=' /boot/dietpiEnv.txt && G_CONFIG_INJECT 'rootdev=UUID=' "rootdev=UUID=$UUID_ROOT" /boot/dietpiEnv.txt && return
+			grep -q '^[[:blank:]]*rootdev=PARTUUID=' /boot/dietpiEnv.txt && G_CONFIG_INJECT 'rootdev=PARTUUID=' "rootdev=PARTUUID=$PARTUUID_ROOT" /boot/dietpiEnv.txt
+
+		# - Armbian
+		elif (( $UPDATE_ARMBIAN == 1 ))
+		then
+			grep -q '^[[:blank:]]*rootdev=UUID=' /boot/armbianEnv.txt && G_CONFIG_INJECT 'rootdev=UUID=' "rootdev=UUID=$UUID_ROOT" /boot/armbianEnv.txt && return
+			grep -q '^[[:blank:]]*rootdev=PARTUUID=' /boot/armbianEnv.txt && G_CONFIG_INJECT 'rootdev=PARTUUID=' "rootdev=PARTUUID=$PARTUUID_ROOT" /boot/armbianEnv.txt
+
+		# - Odroids / classic U-Boot
+		elif (( $UPDATE_ODROID == 1 ))
+		then
+			G_EXEC sed -Ei -e "s/(\"|root=)UUID=[^[:blank:]\"]*/\1UUID=$UUID_ROOT/" -e "s/(\"|root=)PARTUUID=[^[:blank:]\"]*/\1PARTUUID=$PARTUUID_ROOT/" /boot/boot.ini
+
+		# - Modern U-Boot
+		elif (( $UPDATE_UBOOT == 1 ))
+		then
+			G_EXEC sed -Ei -e "s/(\"|root=)UUID=[^[:blank:]\"]*/\1UUID=$UUID_ROOT/" -e "s/(\"|root=)PARTUUID=[^[:blank:]\"]*/\1PARTUUID=$PARTUUID_ROOT/" /boot/boot.cmd
+			G_EXEC mkimage -C none -A arm -T script -d /boot/boot.cmd /boot/boot.scr
+		fi
+	}
+
+	# $1: Optional restore point from the archive
+	Run_Restore(){
+
+		local DATA='data'
+		(( ${1:-1} > 1 )) && DATA="data_$1"
+
+		G_DIETPI-NOTIFY 3 "$G_PROGRAM_NAME" 'Restore'
+
+		# Check valid FS
+		Check_Supported_Directory_Location || return 1
+
+		# Error: Backup not found
+		[[ -f $FP_TARGET/$FP_STATS ]] || { G_WHIP_MSG "Restore failed:\n\n$FP_TARGET/$FP_STATS does not exist\n\nHave you created a backup?"; return 1; }
+
+		# Check for matching filesystem UUIDs of backup and running system
+		Check_UUIDs || return 1
+
+		/boot/dietpi/dietpi-services stop
+
+		# Check if rsync is already running, while the daemon should have been stopped above
+		pgrep 'rsync' &> /dev/null && { Error_Rsync_Already_Running 'Restore'; return 1; }
+
+		# Install required rsync if missing
+		G_AG_CHECK_INSTALL_PREREQ rsync
+
+		# Generate Exclude/Include lists
+		Create_Filter_Include_Exclude
+
+		G_DIETPI-NOTIFY 2 "Restore from $FP_TARGET in progress, please wait..."
+
+		# Init log file
+		echo -e "Restore log from $(Print_Date)\n" > "$FP_TARGET/$FP_LOG"
+		echo -e "$(Print_Date)  Restore starting" >> "$FP_TARGET/$FP_STATS"
+
+		rsync "${aRSYNC_RUN_OPTIONS_RESTORE[@]}" -v --log-file="$FP_TARGET/$FP_LOG" "$FP_TARGET/$DATA/" "$FP_SOURCE"
+		EXIT_CODE=$?
+
+		hash -r # Clear PATH cache
+		(( $UPDATE_UUIDs )) && Update_UUIDs
+
+		/boot/dietpi/dietpi-services start
+
+		G_DIETPI-NOTIFY -1 "$EXIT_CODE" "$G_PROGRAM_NAME: Restore"
+		if (( $EXIT_CODE == 0 )); then
+
+			echo -e "$(Print_Date)  Restore completed" >> "$FP_TARGET/$FP_STATS"
+			G_WHIP_MSG "Restore completed:\n - $FP_TARGET\n\nNB: A Reboot is highly recommended."
+
+		else
+
+			G_WHIP_MSG "Restore failed:\n - $FP_TARGET\n\nYou will see the log file on the next screen. Please check it for information and/or errors."
+
+		fi
+
+		log=1 G_WHIP_VIEWFILE "$FP_TARGET/$FP_LOG"
+
+	}
+
+	#/////////////////////////////////////////////////////////////////////////////////////
+	# Settings
+	#/////////////////////////////////////////////////////////////////////////////////////
+	readonly FP_SETTINGS='/boot/dietpi/.dietpi-backup_settings'
+	DAILY_BACKUP=0
+	AMOUNT=1
+	SPACE_CHECK=0
+
+	Write_Settings_File()
+	{
+		cat << _EOF_ > "$FP_SETTINGS"
+FP_TARGET=$FP_TARGET
+DAILY_BACKUP=$DAILY_BACKUP
+AMOUNT=$AMOUNT
+SPACE_CHECK=$SPACE_CHECK
+_EOF_
+	}
+
+	# shellcheck disable=SC1090
+	Read_Settings_File(){ [[ -f $FP_SETTINGS ]] && . "$FP_SETTINGS"; }
+
+	#/////////////////////////////////////////////////////////////////////////////////////
+	# Menus
+	#/////////////////////////////////////////////////////////////////////////////////////
+	MENU_LASTITEM='Help' # Select "Help" by default
+	TARGETMENUID=0 # Main menu
+	EXIT_CODE=-1 # Relevant for automated calls "dietpi-backup -1" and "dietpi-backup 1" e.g. via G_PROMPT_BACKUP
+
+	# TARGETMENUID=0
+	Menu_Main(){
+
+		local backup_last_completed='Backup not found. Please create one.'
+		local daily_backup_text='Off'
+		(( $DAILY_BACKUP )) && daily_backup_text='On'
+		local space_check_text='Off'
+		(( $SPACE_CHECK )) && space_check_text='On'
+
+		G_WHIP_MENU_ARRAY=(
+			'' '●─ Info '
+			'Help' ": What does $G_PROGRAM_NAME do?"
+		)
+		[[ -f $FP_TARGET/$FP_LOG ]] && G_WHIP_MENU_ARRAY+=('Last log' ': Review last backup/restore log for current location')
+		G_WHIP_MENU_ARRAY+=(
+			'' '●─ Options '
+			'Location' ': Change where your backup will be saved and restored from.'
+			'Filter' ': Modify include/exclude filter for backups.'
+			'Daily Backup' ": [$daily_backup_text] Daily backups via cron job"
+			'Amount' ": [$AMOUNT] The amount of backups to keep"
+			'Space check' ": [$space_check_text] Check free space before backup"
+		)
+		if [[ -f $FP_TARGET/$FP_STATS ]]
+		then
+			G_WHIP_MENU_ARRAY+=('Delete' ": Remove backup ($FP_TARGET)")
+			backup_last_completed=$(grep 'ompleted' "$FP_TARGET/$FP_STATS" | tail -1)
+		fi
+		G_WHIP_MENU_ARRAY+=(
+			'' '●─ Run '
+			'Backup' ': Create (or update) a backup of this device.'
+			'Restore' ': Restore this device from a previous backup.'
+		)
+
+		G_WHIP_DEFAULT_ITEM=$MENU_LASTITEM
+		G_WHIP_BUTTON_CANCEL_TEXT='Exit'
+		if G_WHIP_MENU "Current backup and restore location:\n - $FP_TARGET\n - $backup_last_completed"; then
+
+			MENU_LASTITEM=$G_WHIP_RETURNED_VALUE
+
+			case "$G_WHIP_RETURNED_VALUE" in
+
+				'Help') G_WHIP_MSG 'DietPi-Backup is a program that allows you to Backup and Restore your DietPi system.
+\nIf you have broken your system, or want to reset your system to an earlier date, this can all be done with DietPi-Backup.
+\nSimply choose a location where you want to save and restore your backups from, then, select Backup or Restore.
+\nEnable a daily system backup to run it once a day via daily cron job. The execution time can be changed in "dietpi-cron". Note that this temporarily stops server services. Also we recommend to configure and test the backup with a manual call before enabling this feature.
+\nMore information: https://dietpi.com/docs/dietpi_tools/#dietpi-backup-backuprestore';;
+
+				'Last log') log=1 G_WHIP_VIEWFILE "$FP_TARGET/$FP_LOG";;
+
+				'Location') TARGETMENUID=1;;
+
+				'Filter') nano "$FP_FILTER_CUSTOM";;
+
+				'Daily Backup') DAILY_BACKUP=$(( ! $DAILY_BACKUP ));;
+
+				'Amount') G_WHIP_DEFAULT_ITEM=$AMOUNT G_WHIP_INPUTBOX 'Please enter the amount of backups to keep.\n - Needs to be 1 or greater.' && G_CHECK_VALIDINT "$G_WHIP_RETURNED_VALUE" 1 && AMOUNT=$G_WHIP_RETURNED_VALUE;;
+
+				'Space check') SPACE_CHECK=$(( ! $SPACE_CHECK ));;
+
+				'Delete') G_WHIP_YESNO "Do you wish to DELETE the following backup?\n - $FP_TARGET" && G_EXEC_NOEXIT=1 G_EXEC rm -R "$FP_TARGET";;
+
+				'Backup') G_WHIP_YESNO "The system will be backed up to:\n - $FP_TARGET\n\nDo you wish to continue and start the backup?" && Run_Backup;;
+
+				'Restore')
+					if (( $AMOUNT > 1 ))
+					then
+						G_WHIP_MENU_ARRAY=('1' "$(stat -c '%y' "$FP_TARGET/data")")
+						for ((i=2;i<=$AMOUNT;i++))
+						do
+							[[ -d $FP_TARGET/data_$i ]] && G_WHIP_MENU_ARRAY+=("$i" "$(stat -c '%y' "$FP_TARGET/data_$i")")
+						done
+						if (( ${#G_WHIP_MENU_ARRAY[@]} > 2 ))
+						then
+							G_WHIP_MENU 'Please select the backup from the archive you wish to restore:' && Run_Restore "$G_WHIP_RETURNED_VALUE"
+							return
+						fi
+					fi
+					G_WHIP_YESNO "The system will be restored from:\n - $FP_TARGET\n\nDo you wish to continue and start the restore?" && Run_Restore
+				;;
+
+				*) :;;
+
+			esac
+
+		else
+
+			Menu_Exit
+
+		fi
+
+	}
+
+	Menu_Exit(){ G_WHIP_SIZE_X_MAX=50 G_WHIP_YESNO "Exit $G_PROGRAM_NAME?" && TARGETMENUID=-1 EXIT_CODE=0; }
+
+	# TARGETMENUID=1
+	Menu_Set_Directory(){
+
+		G_WHIP_MENU_ARRAY=(
+
+			'Search' ': Find previous backups'
+			'List' ': Select from a list of available mounts/drives'
+			'Manual' ': Manually type a directory to use'
+		)
+
+		if G_WHIP_MENU "Please select the location where the backup will be saved, and restored from.\n\nYour current location:\n$FP_TARGET"; then
+
+			local current_directory=$FP_TARGET
+
+			case "$G_WHIP_RETURNED_VALUE" in
+
+				'Search')
+
+					G_DIETPI-NOTIFY 2 'Searching for previous backups, please wait...'
+					local alist=()
+					mapfile -t alist < <(find / -type f -name "$FP_STATS")
+
+					# Do we have any results?
+					if [[ ${alist[0]} ]]; then
+
+						# Create List for Whiptail
+						G_WHIP_MENU_ARRAY=()
+						for i in "${alist[@]}"
+						do
+							local last_backup_date=$(sed -n '/ompleted/s/^.*: //p' "$i" | tail -1) # Date of last backup for this backup
+							local backup_directory=${i%"/$FP_STATS"} # Backup directory (minus the backup file), that we can use for target backup directory.
+							G_WHIP_MENU_ARRAY+=("$backup_directory" ": $last_backup_date")
+						done
+
+						G_WHIP_MENU 'Please select a previous backup to use:' || return 0
+						FP_TARGET=$G_WHIP_RETURNED_VALUE
+
+					else
+
+						G_WHIP_MSG 'No previous backups were found.'
+						return 0
+
+					fi
+
+				;;
+
+				'Manual')
+
+					G_WHIP_DEFAULT_ITEM=$FP_TARGET
+					G_WHIP_INPUTBOX 'Please enter the absolute path to the backup directory.\nE.g.: /mnt/dietpi-backup\n - Must be a filesystem which supports symlinks and UNIX permissions, like ext4, F2FS, Btrfs, XFS, ZFS or a proper NFS mount' || return 0
+					FP_TARGET=$G_WHIP_RETURNED_VALUE
+
+				;;
+
+				'List')
+
+					/boot/dietpi/dietpi-drive_manager 1 || return 0
+					FP_TARGET=$(</tmp/dietpi-drive_manager_selmnt)
+					rm /tmp/dietpi-drive_manager_selmnt
+
+					[[ $FP_TARGET == '/' ]] && FP_TARGET='/mnt'
+					FP_TARGET+='/dietpi-backup'
+
+				;;
+
+				*) :;;
+
+			esac
+
+			# If not supported, reset directory target to previous
+			Check_Supported_Directory_Location || FP_TARGET=$current_directory
+
+		else
+
+			TARGETMENUID=0 # Return to main menu
+
+		fi
+
+	}
+
+	#/////////////////////////////////////////////////////////////////////////////////////
+	# Main Loop
+	#/////////////////////////////////////////////////////////////////////////////////////
+	# Read settings
+	Read_Settings_File
+
+	# $2 Optional directory input
+	[[ $2 ]] && FP_TARGET=$2
+
+	# Create default filter file, if not yet present
+	[[ -f $FP_FILTER_CUSTOM ]] || cat << '_EOF_' > "$FP_FILTER_CUSTOM"
+# DietPi-Backup include/exclude filter
+
+# Prefix "-" exclude items, "+" include items which would match a wildcard exclude rule.
+# Suffix "/" match directories only, no files or symlinks.
+# Wildcard "*" matches any item name or part of it, but "/dir/*" does not match the dir itself.
+# Since the list is processed from top to bottom and the first match defines the applied rule:
+# - Includes need to be defined before their wildcard exclude rule.
+# - Excludes need to be defined before their wildcard include rule.
+# Symlinks are handled as such and never processed recursively.
+# Excluded directories are not processed recursively, so contained items cannot be included.
+# Included directories are not processed recursively, so contained items cannot be excluded.
+# Hence, to include items within an excluded directory:
+# - Do not exclude the directory itself, but contained items via wildcard.
+# - Define includes first, to override the wildcard exclude rule.
+# - See the below default rules, how we exclude all items below /mnt/
+#   but include the dietpi_userdata directory, if it is no symlink.
+# To prevent loops, the backup target dir, log and config are excluded internally.
+
++ /mnt/dietpi_userdata/
+- /mnt/*
+- /media/
+_EOF_
+	#-----------------------------------------------------------------------------
+	# Run Backup
+	if (( $INPUT == 1 )); then
+
+		Run_Backup
+
+	# Run Restore
+	elif (( $INPUT == -1 )); then
+
+		Run_Restore
+
+	#-----------------------------------------------------------------------------
+	# Run menu, if interactive
+	elif (( $G_INTERACTIVE )); then
+
+		until (( $TARGETMENUID < 0 ))
+		do
+			G_TERM_CLEAR
+
+			if (( $TARGETMENUID == 1 )); then
+
+				Menu_Set_Directory
+
+			else
+
+				Menu_Main
+
+			fi
+		done
+
+		# Save settings
+		Write_Settings_File
+
+	fi
+	#-----------------------------------------------------------------------------------
+	exit "$EXIT_CODE"
+	#-----------------------------------------------------------------------------------
+}
