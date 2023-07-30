@@ -1,0 +1,5 @@
+cd /usr/src/nextcloud/
+
+wget https://download.nextcloud.com/server/releases/latest.zip
+
+wget https://download.nextcloud.com/server/installer/setup-nextcloud.php
