@@ -1,5 +1,5 @@
 # DO NOT EDIT: created by update.sh from Dockerfile-debian.template
-FROM php:8.2-fpm-bookworm
+FROM php:8.2-apache-bookworm
 
 # entrypoint.sh and cron.sh dependencies
 RUN set -ex; \
@@ -122,8 +122,23 @@ RUN { \
 
 VOLUME /var/www/html
 
+RUN a2enmod headers rewrite remoteip ; \
+    { \
+     echo 'RemoteIPHeader X-Real-IP'; \
+     echo 'RemoteIPInternalProxy 10.0.0.0/8'; \
+     echo 'RemoteIPInternalProxy 172.16.0.0/12'; \
+     echo 'RemoteIPInternalProxy 192.168.0.0/16'; \
+    } > /etc/apache2/conf-available/remoteip.conf; \
+    a2enconf remoteip
 
-ENV NEXTCLOUD_VERSION 26.0.7
+# set apache config LimitRequestBody
+ENV APACHE_BODY_LIMIT 1073741824
+RUN { \
+     echo 'LimitRequestBody ${APACHE_BODY_LIMIT}'; \
+    } > /etc/apache2/conf-available/apache-limits.conf; \
+    a2enconf apache-limits
+
+ENV NEXTCLOUD_VERSION 27.1.1
 
 RUN set -ex; \
     fetchDeps=" \
@@ -133,8 +148,8 @@ RUN set -ex; \
     apt-get update; \
     apt-get install -y --no-install-recommends $fetchDeps; \
     \
-    curl -fsSL -o nextcloud.tar.bz2 "https://download.nextcloud.com/server/releases/nextcloud-26.0.7.tar.bz2"; \
-    curl -fsSL -o nextcloud.tar.bz2.asc "https://download.nextcloud.com/server/releases/nextcloud-26.0.7.tar.bz2.asc"; \
+    curl -fsSL -o nextcloud.tar.bz2 "https://download.nextcloud.com/server/releases/nextcloud-27.1.1.tar.bz2"; \
+    curl -fsSL -o nextcloud.tar.bz2.asc "https://download.nextcloud.com/server/releases/nextcloud-27.1.1.tar.bz2.asc"; \
     export GNUPGHOME="$(mktemp -d)"; \
 # gpg key from https://nextcloud.com/nextcloud.asc
     gpg --batch --keyserver keyserver.ubuntu.com --recv-keys 28806A878AE423A28372792ED75899B9A724937A; \
@@ -154,4 +169,4 @@ COPY *.sh upgrade.exclude /
 COPY config/* /usr/src/nextcloud/config/
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["php-fpm"]
+CMD ["apache2-foreground"]
