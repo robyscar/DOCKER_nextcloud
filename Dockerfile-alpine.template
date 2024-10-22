@@ -5,6 +5,13 @@ RUN set -ex; \
     \
     apk add --no-cache \
         imagemagick \
+        imagemagick-pdf \
+        imagemagick-jpeg \
+        imagemagick-raw \
+        imagemagick-tiff \
+        imagemagick-heic \
+        imagemagick-webp \
+        imagemagick-svg \
         rsync \
     ; \
     \
@@ -35,11 +42,13 @@ RUN set -ex; \
         postgresql-dev \
     ; \
     \
+    docker-php-ext-configure ftp --with-openssl-dir=/usr; \
     docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp; \
     docker-php-ext-configure ldap; \
     docker-php-ext-install -j "$(nproc)" \
         bcmath \
         exif \
+        ftp \
         gd \
         gmp \
         intl \
